@@ -3,7 +3,7 @@ export default function Home() {
     <div style={{
       minHeight: '100vh',
       backgroundColor: '#000',
-      color: '#0f0',
+      color: '#ff1493',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
@@ -11,13 +11,10 @@ export default function Home() {
       fontFamily: 'monospace',
       fontSize: '24px'
     }}>
-      <h1 style={{ fontSize: '48px', marginBottom: '20px' }}>
+      <h1 style={{ fontSize: '48px', marginBottom: '20px', color: '#ff1493' }}>
         🚀 Two Million Dollar Homepage
       </h1>
-      <p>Built by Noah, a 10-year-old 4th grader using AI</p>
-      <p style={{ marginTop: '20px', fontSize: '18px', color: '#0f0' }}>
-        Coming soon...
-      </p>
+      <p style={{ color: '#ff1493' }}>Stitch Go Boom What's Up</p>
     </div>
   );
 }
