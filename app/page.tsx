@@ -180,15 +180,15 @@ export default function Home() {
         padding: '15px 30px',
         borderBottom: '1px solid #333'
       }}>
-        <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff1493' }}>
+        <a href="/" style={{ fontSize: '24px', fontWeight: 'bold', color: '#ff1493', textDecoration: 'none' }}>
           2M Homepage
-        </div>
+        </a>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
           <span style={{ color: '#0f0' }}>{availablePixels.toLocaleString()} pixels left</span>
-          <a href="#about" style={{ color: '#fff', textDecoration: 'none' }}>About</a>
-          <a href="#faq" style={{ color: '#fff', textDecoration: 'none' }}>FAQ</a>
-          <a href="#contact" style={{ color: '#fff', textDecoration: 'none' }}>Contact</a>
-          <a href="https://x.com/yourhandle" target="_blank" style={{ color: '#fff', textDecoration: 'none' }}>𝕏</a>
+          <a href="/about" style={{ color: '#fff', textDecoration: 'none' }}>About</a>
+          <a href="/faq" style={{ color: '#fff', textDecoration: 'none' }}>FAQ</a>
+          <a href="/contact" style={{ color: '#fff', textDecoration: 'none' }}>Contact</a>
+          <a href="https://x.com/2Mhomepage" target="_blank" rel="noopener noreferrer" style={{ color: '#fff', textDecoration: 'none' }}>𝕏</a>
         </div>
       </nav>
 
