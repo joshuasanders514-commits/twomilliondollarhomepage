@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { supabase } from './lib/supabase';
 
 export default function Home() {
   const GRID_WIDTH = 316;
   const GRID_HEIGHT = 316;
   const EXTRA_ROW_PIXELS = 144;
-  const TOTAL_PIXELS = (GRID_WIDTH * GRID_HEIGHT) + EXTRA_ROW_PIXELS; // 100,000!
+  const TOTAL_PIXELS = (GRID_WIDTH * GRID_HEIGHT) + EXTRA_ROW_PIXELS;
   const PIXEL_SIZE = 5;
   const PRICE_PER_PIXEL = 20;
   
@@ -15,6 +16,9 @@ export default function Home() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<{x: number, y: number} | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{x: number, y: number} | null>(null);
+  const [soldPixels, setSoldPixels] = useState<Set<number>>(new Set());
+  const [reservedPixels, setReservedPixels] = useState<Set<number>>(new Set());
+  const [dbConnected, setDbConnected] = useState<boolean | null>(null);
 
   // Batch pricing options
   const batchOptions = [
@@ -24,9 +28,92 @@ export default function Home() {
     { size: '20×20', pixels: 400, price: 7500, width: 20, height: 20 }
   ];
 
-  // Quick select batch size with discounted price - NOW STARTS AT TOP
+  // Load pixel data from Supabase
+  useEffect(() => {
+    async function loadPixels() {
+      try {
+        const { data, error } = await supabase
+          .from('pixels')
+          .select('id, status')
+          .in('status', ['sold', 'reserved', 'pending']);
+
+        if (error) {
+          console.error('Database error:', error);
+          setDbConnected(false);
+          return;
+        }
+
+        setDbConnected(true);
+
+        const sold = new Set<number>();
+        const reserved = new Set<number>();
+
+        data?.forEach(pixel => {
+          if (pixel.status === 'sold' || pixel.status === 'pending') {
+            sold.add(pixel.id);
+          } else if (pixel.status === 'reserved') {
+            reserved.add(pixel.id);
+          }
+        });
+
+        setSoldPixels(sold);
+        setReservedPixels(reserved);
+        setAvailablePixels(TOTAL_PIXELS - sold.size - reserved.size);
+      } catch (err) {
+        console.error('Connection error:', err);
+        setDbConnected(false);
+      }
+    }
+
+    loadPixels();
+  }, []);
+
+  // Convert x,y position to pixel ID
+  const getPixelId = (x: number, y: number): number | null => {
+    if (y < GRID_HEIGHT) {
+      // Main grid (rows 1-316)
+      return (y * GRID_WIDTH) + x + 1;
+    } else if (y === GRID_HEIGHT) {
+      // Extra row (row 317) - centered
+      const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
+      if (x >= extraRowStartX && x < extraRowStartX + EXTRA_ROW_PIXELS) {
+        return (GRID_WIDTH * GRID_HEIGHT) + (x - extraRowStartX) + 1;
+      }
+    }
+    return null;
+  };
+
+  // Get all pixel IDs in current selection
+  const getSelectedPixelIds = (): number[] => {
+    if (!selectionStart || !selectionEnd) return [];
+    
+    const startX = Math.min(selectionStart.x, selectionEnd.x);
+    const startY = Math.min(selectionStart.y, selectionEnd.y);
+    const endX = Math.max(selectionStart.x, selectionEnd.x);
+    const endY = Math.max(selectionStart.y, selectionEnd.y);
+    
+    const pixelIds: number[] = [];
+    for (let y = startY; y <= endY; y++) {
+      for (let x = startX; x <= endX; x++) {
+        const pixelId = getPixelId(x, y);
+        if (pixelId !== null) {
+          pixelIds.push(pixelId);
+        }
+      }
+    }
+    return pixelIds;
+  };
+
+  // Check if selection contains unavailable pixels
+  const getUnavailableInSelection = (): { sold: number[], reserved: number[] } => {
+    const selectedIds = getSelectedPixelIds();
+    const sold = selectedIds.filter(id => soldPixels.has(id));
+    const reserved = selectedIds.filter(id => reservedPixels.has(id));
+    return { sold, reserved };
+  };
+
+  // Quick select batch size
   const handleBatchSelect = (width: number, height: number, discountedPrice: number) => {
-    // Start from top-center of grid (centered horizontally, very top vertically)
     const centerX = Math.floor(GRID_WIDTH / 2) - Math.floor(width / 2);
     const startY = 0;
     
@@ -34,7 +121,7 @@ export default function Home() {
     setSelectionEnd({ x: centerX + width - 1, y: startY + height - 1 });
   };
 
-  // Draw the grid - OPTIMIZED with centered extra row
+  // Draw the grid
   const drawGrid = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -42,20 +129,48 @@ export default function Home() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Fill background
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw main grid (316x316)
+    // Draw main grid
     ctx.fillStyle = '#666';
     ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
 
-    // Draw extra row CENTERED (144 pixels)
+    // Draw extra row centered
     const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
     ctx.fillRect(extraRowStartX * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE, EXTRA_ROW_PIXELS * PIXEL_SIZE, PIXEL_SIZE);
+
+    // Draw sold pixels in red
+    ctx.fillStyle = '#ff0000';
+    soldPixels.forEach(pixelId => {
+      let x, y;
+      if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
+        x = ((pixelId - 1) % GRID_WIDTH);
+        y = Math.floor((pixelId - 1) / GRID_WIDTH);
+      } else {
+        const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
+        x = extraRowStartX + extraIndex;
+        y = GRID_HEIGHT;
+      }
+      ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+    });
+
+    // Draw reserved pixels in gold
+    ctx.fillStyle = '#ffd700';
+    reservedPixels.forEach(pixelId => {
+      let x, y;
+      if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
+        x = ((pixelId - 1) % GRID_WIDTH);
+        y = Math.floor((pixelId - 1) / GRID_WIDTH);
+      } else {
+        const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
+        x = extraRowStartX + extraIndex;
+        y = GRID_HEIGHT;
+      }
+      ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+    });
 
     // Draw gridlines for main grid
     ctx.strokeStyle = '#333';
@@ -73,20 +188,19 @@ export default function Home() {
       ctx.stroke();
     }
 
-    // Draw gridlines for extra row (centered)
+    // Draw gridlines for extra row
     for (let i = 0; i <= EXTRA_ROW_PIXELS; i++) {
       ctx.beginPath();
       ctx.moveTo((extraRowStartX + i) * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
       ctx.lineTo((extraRowStartX + i) * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
       ctx.stroke();
     }
-    // Bottom line of extra row
     ctx.beginPath();
     ctx.moveTo(extraRowStartX * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
     ctx.lineTo((extraRowStartX + EXTRA_ROW_PIXELS) * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
     ctx.stroke();
 
-    // Draw selection if active
+    // Draw selection
     if (selectionStart && selectionEnd) {
       const startX = Math.min(selectionStart.x, selectionEnd.x);
       const startY = Math.min(selectionStart.y, selectionEnd.y);
@@ -114,7 +228,7 @@ export default function Home() {
 
   useEffect(() => {
     drawGrid();
-  }, [selectionStart, selectionEnd]);
+  }, [selectionStart, selectionEnd, soldPixels, reservedPixels]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -153,14 +267,15 @@ export default function Home() {
     const height = Math.abs(selectionEnd.y - selectionStart.y) + 1;
     const pixelCount = width * height;
     
-    // Check if this matches a batch size for discount
     const matchingBatch = batchOptions.find(
       opt => opt.width === width && opt.height === height
     );
     
     const price = matchingBatch ? matchingBatch.price : pixelCount * PRICE_PER_PIXEL;
+    const selectedIds = getSelectedPixelIds();
+    const unavailable = getUnavailableInSelection();
 
-    return { width, height, pixelCount, price };
+    return { width, height, pixelCount, price, selectedIds, unavailable };
   };
 
   const selectionInfo = getSelectionInfo();
@@ -185,6 +300,8 @@ export default function Home() {
         </a>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
           <span style={{ color: '#0f0' }}>{availablePixels.toLocaleString()} pixels left</span>
+          {dbConnected === true && <span style={{ color: '#0f0', fontSize: '12px' }}>● DB Connected</span>}
+          {dbConnected === false && <span style={{ color: '#f00', fontSize: '12px' }}>● DB Error</span>}
           <a href="/about" style={{ color: '#fff', textDecoration: 'none' }}>About</a>
           <a href="/faq" style={{ color: '#fff', textDecoration: 'none' }}>FAQ</a>
           <a href="/contact" style={{ color: '#fff', textDecoration: 'none' }}>Contact</a>
@@ -239,7 +356,7 @@ export default function Home() {
           ))}
         </div>
 
-        {/* GRID LABEL - 50% smaller text */}
+        {/* GRID LABEL */}
         <div style={{ textAlign: 'center', marginBottom: '15px' }}>
           <h2 style={{ color: '#ff1493', margin: '0 0 8px', fontSize: '14px', fontWeight: 'normal' }}>
             316×316 Pixel Grid — Click and drag to select pixels, or choose a popular size:
@@ -327,7 +444,7 @@ export default function Home() {
           />
         </div>
 
-        {/* SELECTION INFO - FLOATING */}
+        {/* SELECTION INFO */}
         {selectionInfo && selectionEnd && (
           <div style={{
             position: 'fixed',
@@ -345,20 +462,37 @@ export default function Home() {
             <h3 style={{ color: '#ff1493', margin: '0 0 15px' }}>Your Selection</h3>
             <p style={{ margin: '5px 0' }}>Size: {selectionInfo.width} × {selectionInfo.height}</p>
             <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount}</p>
+            <p style={{ margin: '5px 0', fontSize: '12px', color: '#888' }}>
+              IDs: {selectionInfo.selectedIds.slice(0, 5).join(', ')}{selectionInfo.selectedIds.length > 5 ? '...' : ''}
+            </p>
+            
+            {selectionInfo.unavailable.sold.length > 0 && (
+              <p style={{ margin: '5px 0', color: '#ff0000', fontSize: '12px' }}>
+                ⚠️ {selectionInfo.unavailable.sold.length} pixel(s) already sold
+              </p>
+            )}
+            {selectionInfo.unavailable.reserved.length > 0 && (
+              <p style={{ margin: '5px 0', color: '#ffd700', fontSize: '12px' }}>
+                ⚠️ {selectionInfo.unavailable.reserved.length} pixel(s) reserved for auction
+              </p>
+            )}
+            
             <p style={{ margin: '5px 0', fontSize: '24px', fontWeight: 'bold', color: '#0f0' }}>
               ${selectionInfo.price.toLocaleString()}
             </p>
-            <button style={{
-              marginTop: '15px',
-              padding: '12px 30px',
-              backgroundColor: '#ff1493',
-              color: '#fff',
-              border: 'none',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              cursor: 'pointer',
-              borderRadius: '5px'
-            }}>
+            <button 
+              disabled={selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0}
+              style={{
+                marginTop: '15px',
+                padding: '12px 30px',
+                backgroundColor: (selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0) ? '#555' : '#ff1493',
+                color: '#fff',
+                border: 'none',
+                fontSize: '18px',
+                fontWeight: 'bold',
+                cursor: (selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0) ? 'not-allowed' : 'pointer',
+                borderRadius: '5px'
+              }}>
               Buy Now
             </button>
           </div>
