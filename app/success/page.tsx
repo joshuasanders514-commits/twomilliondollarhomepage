@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '../lib/supabase';
 
-export default function SuccessPage() {
+export const dynamic = 'force-dynamic';
+
+function SuccessContent() {
   const searchParams = useSearchParams();
   const purchaseId = searchParams.get('purchase_id');
   
@@ -29,7 +31,6 @@ export default function SuccessPage() {
         return;
       }
 
-      // Get purchase details
       const { data: purchaseData, error: purchaseError } = await supabase
         .from('purchases')
         .select('*')
@@ -44,7 +45,6 @@ export default function SuccessPage() {
 
       setPurchase(purchaseData);
 
-      // Get pixel IDs for this purchase
       const { data: pixels, error: pixelsError } = await supabase
         .from('pixels')
         .select('id')
@@ -54,7 +54,6 @@ export default function SuccessPage() {
         setPixelIds(pixels.map(p => p.id).sort((a, b) => a - b));
       }
 
-      // Check if already submitted
       if (purchaseData.image_url) {
         setSubmitted(true);
       }
@@ -97,7 +96,6 @@ export default function SuccessPage() {
     setError('');
 
     try {
-      // Upload image to Supabase Storage
       const fileExt = image.name.split('.').pop();
       const fileName = `${purchaseId}.${fileExt}`;
       
@@ -111,14 +109,12 @@ export default function SuccessPage() {
         return;
       }
 
-      // Get public URL
       const { data: urlData } = supabase.storage
         .from('pixel-images')
         .getPublicUrl(fileName);
 
       const imageUrl = urlData.publicUrl;
 
-      // Parse URLs
       let urls: string[] = [];
       if (urlMode === 'single') {
         urls = pixelIds.map(() => singleUrl);
@@ -130,7 +126,6 @@ export default function SuccessPage() {
         urls = urlList.slice(0, pixelIds.length);
       }
 
-      // Update purchase record
       const { error: purchaseUpdateError } = await supabase
         .from('purchases')
         .update({
@@ -147,7 +142,6 @@ export default function SuccessPage() {
         return;
       }
 
-      // Update each pixel with its URL, image, and mark as SOLD
       for (let i = 0; i < pixelIds.length; i++) {
         const { error: pixelError } = await supabase
           .from('pixels')
@@ -237,7 +231,6 @@ export default function SuccessPage() {
           <p style={{ color: '#ff0000', marginBottom: '20px' }}>{error}</p>
         )}
 
-        {/* Company Name */}
         <div style={{ marginBottom: '25px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
             Company/Display Name
@@ -259,7 +252,6 @@ export default function SuccessPage() {
           />
         </div>
 
-        {/* Image Upload */}
         <div style={{ marginBottom: '25px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
             Upload Your Image
@@ -293,7 +285,6 @@ export default function SuccessPage() {
           </p>
         </div>
 
-        {/* URL Mode Selection */}
         {pixelIds.length > 1 && (
           <div style={{ marginBottom: '25px' }}>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
@@ -330,7 +321,6 @@ export default function SuccessPage() {
           </div>
         )}
 
-        {/* URL Input */}
         <div style={{ marginBottom: '25px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
             {urlMode === 'single' || pixelIds.length === 1 
@@ -379,7 +369,6 @@ export default function SuccessPage() {
           )}
         </div>
 
-        {/* Pixel IDs Reference */}
         <div style={{ marginBottom: '25px', padding: '15px', backgroundColor: '#1a1a1a', borderRadius: '5px' }}>
           <p style={{ fontWeight: 'bold', marginBottom: '5px' }}>Your Pixel IDs:</p>
           <p style={{ color: '#888', fontSize: '12px', wordBreak: 'break-all' }}>
@@ -387,7 +376,6 @@ export default function SuccessPage() {
           </p>
         </div>
 
-        {/* Submit Button */}
         <button
           onClick={handleSubmit}
           disabled={submitting}
@@ -407,5 +395,13 @@ export default function SuccessPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function SuccessPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
+      <SuccessContent />
+    </Suspense>
   );
 }
