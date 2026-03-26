@@ -33,7 +33,6 @@ export default function Home() {
     { size: '20×20', pixels: 400, price: 7500, width: 20, height: 20 }
   ];
 
-  // Load images for sold pixels
   useEffect(() => {
     const imageUrls = new Set<string>();
     soldPixels.forEach(pixel => {
@@ -224,7 +223,6 @@ export default function Home() {
     const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
     ctx.fillRect(extraRowStartX * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE, EXTRA_ROW_PIXELS * PIXEL_SIZE, PIXEL_SIZE);
 
-    // Draw sold pixels with images
     soldPixels.forEach((info, pixelId) => {
       const coords = getPixelCoords(pixelId);
       if (!coords) return;
@@ -238,7 +236,6 @@ export default function Home() {
       }
     });
 
-    // Draw reserved pixels in gold
     ctx.fillStyle = '#ffd700';
     reservedPixels.forEach(pixelId => {
       const coords = getPixelCoords(pixelId);
@@ -246,7 +243,6 @@ export default function Home() {
       ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
-    // Draw gridlines
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= GRID_WIDTH; i++) {
@@ -273,7 +269,6 @@ export default function Home() {
     ctx.lineTo((extraRowStartX + EXTRA_ROW_PIXELS) * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
     ctx.stroke();
 
-    // Draw selection
     if (selectionStart && selectionEnd) {
       const startX = Math.min(selectionStart.x, selectionEnd.x);
       const startY = Math.min(selectionStart.y, selectionEnd.y);
@@ -315,7 +310,11 @@ export default function Home() {
     if (pixelId && soldPixels.has(pixelId)) {
       const pixelData = soldPixels.get(pixelId);
       if (pixelData?.website_url) {
-        window.open(pixelData.website_url, '_blank');
+        let url = pixelData.website_url;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          url = 'https://' + url;
+        }
+        window.open(url, '_blank');
       }
       return;
     }
@@ -330,7 +329,6 @@ export default function Home() {
     const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
     const pixelId = getPixelId(x, y);
 
-    // Don't start selection if clicking a sold pixel
     if (pixelId && soldPixels.has(pixelId)) {
       return;
     }
@@ -350,7 +348,6 @@ export default function Home() {
     const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
     const pixelId = getPixelId(x, y);
 
-    // Show tooltip for sold pixels
     if (pixelId && soldPixels.has(pixelId)) {
       const pixelData = soldPixels.get(pixelId);
       setHoveredPixel({
@@ -555,7 +552,6 @@ export default function Home() {
             }}
           />
           
-          {/* Tooltip for sold pixels */}
           {hoveredPixel && (
             <div style={{
               position: 'fixed',
