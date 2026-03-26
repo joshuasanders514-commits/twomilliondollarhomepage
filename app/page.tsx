@@ -16,11 +16,16 @@ export default function Home() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<{x: number, y: number} | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{x: number, y: number} | null>(null);
-  const [soldPixels, setSoldPixels] = useState<Set<number>>(new Set());
+  const [soldPixels, setSoldPixels] = useState<Map<number, {image_url: string, website_url: string, company_name: string}>>(new Map());
   const [reservedPixels, setReservedPixels] = useState<Set<number>>(new Set());
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [email, setEmail] = useState('');
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
+  const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
+  const [hoveredPixel, setHoveredPixel] = useState<{id: number, company: string, x: number, y: number} | null>(null);
 
-  // Batch pricing options
   const batchOptions = [
     { size: '2×2', pixels: 4, price: 75, width: 2, height: 2 },
     { size: '5×5', pixels: 25, price: 475, width: 5, height: 5, popular: true },
@@ -28,13 +33,31 @@ export default function Home() {
     { size: '20×20', pixels: 400, price: 7500, width: 20, height: 20 }
   ];
 
-  // Load pixel data from Supabase
+  // Load images for sold pixels
+  useEffect(() => {
+    const imageUrls = new Set<string>();
+    soldPixels.forEach(pixel => {
+      if (pixel.image_url) imageUrls.add(pixel.image_url);
+    });
+
+    imageUrls.forEach(url => {
+      if (!loadedImages.has(url)) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          setLoadedImages(prev => new Map(prev).set(url, img));
+        };
+        img.src = url;
+      }
+    });
+  }, [soldPixels]);
+
   useEffect(() => {
     async function loadPixels() {
       try {
         const { data, error } = await supabase
           .from('pixels')
-          .select('id, status')
+          .select('id, status, image_url, website_url, company_name')
           .in('status', ['sold', 'reserved', 'pending']);
 
         if (error) {
@@ -45,13 +68,19 @@ export default function Home() {
 
         setDbConnected(true);
 
-        const sold = new Set<number>();
+        const sold = new Map<number, {image_url: string, website_url: string, company_name: string}>();
         const reserved = new Set<number>();
 
         data?.forEach(pixel => {
-          if (pixel.status === 'sold' || pixel.status === 'pending') {
-            sold.add(pixel.id);
+          if (pixel.status === 'sold') {
+            sold.set(pixel.id, {
+              image_url: pixel.image_url || '',
+              website_url: pixel.website_url || '',
+              company_name: pixel.company_name || ''
+            });
           } else if (pixel.status === 'reserved') {
+            reserved.add(pixel.id);
+          } else if (pixel.status === 'pending') {
             reserved.add(pixel.id);
           }
         });
@@ -68,13 +97,10 @@ export default function Home() {
     loadPixels();
   }, []);
 
-  // Convert x,y position to pixel ID
   const getPixelId = (x: number, y: number): number | null => {
     if (y < GRID_HEIGHT) {
-      // Main grid (rows 1-316)
       return (y * GRID_WIDTH) + x + 1;
     } else if (y === GRID_HEIGHT) {
-      // Extra row (row 317) - centered
       const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
       if (x >= extraRowStartX && x < extraRowStartX + EXTRA_ROW_PIXELS) {
         return (GRID_WIDTH * GRID_HEIGHT) + (x - extraRowStartX) + 1;
@@ -83,7 +109,22 @@ export default function Home() {
     return null;
   };
 
-  // Get all pixel IDs in current selection
+  const getPixelCoords = (pixelId: number): {x: number, y: number} | null => {
+    const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
+    if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
+      return {
+        x: (pixelId - 1) % GRID_WIDTH,
+        y: Math.floor((pixelId - 1) / GRID_WIDTH)
+      };
+    } else {
+      const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
+      return {
+        x: extraRowStartX + extraIndex,
+        y: GRID_HEIGHT
+      };
+    }
+  };
+
   const getSelectedPixelIds = (): number[] => {
     if (!selectionStart || !selectionEnd) return [];
     
@@ -104,7 +145,6 @@ export default function Home() {
     return pixelIds;
   };
 
-  // Check if selection contains unavailable pixels
   const getUnavailableInSelection = (): { sold: number[], reserved: number[] } => {
     const selectedIds = getSelectedPixelIds();
     const sold = selectedIds.filter(id => soldPixels.has(id));
@@ -112,16 +152,60 @@ export default function Home() {
     return { sold, reserved };
   };
 
-  // Quick select batch size
   const handleBatchSelect = (width: number, height: number, discountedPrice: number) => {
     const centerX = Math.floor(GRID_WIDTH / 2) - Math.floor(width / 2);
     const startY = 0;
     
     setSelectionStart({ x: centerX, y: startY });
     setSelectionEnd({ x: centerX + width - 1, y: startY + height - 1 });
+    setShowCheckout(false);
   };
 
-  // Draw the grid
+  const handleBuyClick = () => {
+    setShowCheckout(true);
+    setCheckoutError('');
+  };
+
+  const handleCheckout = async () => {
+    if (!email) {
+      setCheckoutError('Please enter your email');
+      return;
+    }
+
+    const selectionInfo = getSelectionInfo();
+    if (!selectionInfo) return;
+
+    setCheckoutLoading(true);
+    setCheckoutError('');
+
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pixelIds: selectionInfo.selectedIds,
+          price: selectionInfo.price,
+          email: email
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.error) {
+        setCheckoutError(data.error);
+        setCheckoutLoading(false);
+        return;
+      }
+
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (err) {
+      setCheckoutError('Something went wrong. Please try again.');
+      setCheckoutLoading(false);
+    }
+  };
+
   const drawGrid = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -134,45 +218,35 @@ export default function Home() {
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw main grid
     ctx.fillStyle = '#666';
     ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
 
-    // Draw extra row centered
     const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
     ctx.fillRect(extraRowStartX * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE, EXTRA_ROW_PIXELS * PIXEL_SIZE, PIXEL_SIZE);
 
-    // Draw sold pixels in red
-    ctx.fillStyle = '#ff0000';
-    soldPixels.forEach(pixelId => {
-      let x, y;
-      if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
-        x = ((pixelId - 1) % GRID_WIDTH);
-        y = Math.floor((pixelId - 1) / GRID_WIDTH);
+    // Draw sold pixels with images
+    soldPixels.forEach((info, pixelId) => {
+      const coords = getPixelCoords(pixelId);
+      if (!coords) return;
+      
+      const img = loadedImages.get(info.image_url);
+      if (img) {
+        ctx.drawImage(img, coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
       } else {
-        const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
-        x = extraRowStartX + extraIndex;
-        y = GRID_HEIGHT;
+        ctx.fillStyle = '#ff1493';
+        ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
       }
-      ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
     // Draw reserved pixels in gold
     ctx.fillStyle = '#ffd700';
     reservedPixels.forEach(pixelId => {
-      let x, y;
-      if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
-        x = ((pixelId - 1) % GRID_WIDTH);
-        y = Math.floor((pixelId - 1) / GRID_WIDTH);
-      } else {
-        const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
-        x = extraRowStartX + extraIndex;
-        y = GRID_HEIGHT;
-      }
-      ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+      const coords = getPixelCoords(pixelId);
+      if (!coords) return;
+      ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
-    // Draw gridlines for main grid
+    // Draw gridlines
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= GRID_WIDTH; i++) {
@@ -188,7 +262,6 @@ export default function Home() {
       ctx.stroke();
     }
 
-    // Draw gridlines for extra row
     for (let i = 0; i <= EXTRA_ROW_PIXELS; i++) {
       ctx.beginPath();
       ctx.moveTo((extraRowStartX + i) * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
@@ -228,7 +301,25 @@ export default function Home() {
 
   useEffect(() => {
     drawGrid();
-  }, [selectionStart, selectionEnd, soldPixels, reservedPixels]);
+  }, [selectionStart, selectionEnd, soldPixels, reservedPixels, loadedImages]);
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
+    const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
+    const pixelId = getPixelId(x, y);
+
+    if (pixelId && soldPixels.has(pixelId)) {
+      const pixelData = soldPixels.get(pixelId);
+      if (pixelData?.website_url) {
+        window.open(pixelData.website_url, '_blank');
+      }
+      return;
+    }
+  };
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -237,27 +328,52 @@ export default function Home() {
     const rect = canvas.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
     const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
+    const pixelId = getPixelId(x, y);
+
+    // Don't start selection if clicking a sold pixel
+    if (pixelId && soldPixels.has(pixelId)) {
+      return;
+    }
 
     setIsSelecting(true);
     setSelectionStart({ x, y });
     setSelectionEnd({ x, y });
+    setShowCheckout(false);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isSelecting) return;
-
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
     const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
     const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
+    const pixelId = getPixelId(x, y);
 
+    // Show tooltip for sold pixels
+    if (pixelId && soldPixels.has(pixelId)) {
+      const pixelData = soldPixels.get(pixelId);
+      setHoveredPixel({
+        id: pixelId,
+        company: pixelData?.company_name || 'Unknown',
+        x: e.clientX,
+        y: e.clientY
+      });
+    } else {
+      setHoveredPixel(null);
+    }
+
+    if (!isSelecting) return;
     setSelectionEnd({ x, y });
   };
 
   const handleMouseUp = () => {
     setIsSelecting(false);
+  };
+
+  const handleMouseLeave = () => {
+    setIsSelecting(false);
+    setHoveredPixel(null);
   };
 
   const getSelectionInfo = () => {
@@ -279,6 +395,7 @@ export default function Home() {
   };
 
   const selectionInfo = getSelectionInfo();
+  const canBuy = selectionInfo && selectionInfo.unavailable.sold.length === 0 && selectionInfo.unavailable.reserved.length === 0;
 
   return (
     <div style={{ 
@@ -287,7 +404,6 @@ export default function Home() {
       color: '#fff',
       fontFamily: 'Arial, sans-serif'
     }}>
-      {/* NAV BAR */}
       <nav style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -309,10 +425,8 @@ export default function Home() {
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
       <div style={{ padding: '30px', maxWidth: '1400px', margin: '0 auto' }}>
         
-        {/* TITLE SPONSOR */}
         <div style={{
           width: '100%',
           maxWidth: '1000px',
@@ -329,7 +443,6 @@ export default function Home() {
           Title Sponsor Available - Email for Pricing
         </div>
 
-        {/* 6 FEATURED SPONSORS */}
         <div style={{
           display: 'flex',
           gap: '8px',
@@ -356,13 +469,11 @@ export default function Home() {
           ))}
         </div>
 
-        {/* GRID LABEL */}
         <div style={{ textAlign: 'center', marginBottom: '15px' }}>
           <h2 style={{ color: '#ff1493', margin: '0 0 8px', fontSize: '14px', fontWeight: 'normal' }}>
             316×316 Pixel Grid — Click and drag to select pixels, or choose a popular size:
           </h2>
           
-          {/* BATCH PRICING BUTTONS */}
           <div style={{ 
             display: 'flex', 
             gap: '10px', 
@@ -410,6 +521,7 @@ export default function Home() {
               onClick={() => {
                 setSelectionStart(null);
                 setSelectionEnd(null);
+                setShowCheckout(false);
               }}
               style={{
                 padding: '12px 20px',
@@ -427,24 +539,42 @@ export default function Home() {
           </div>
         </div>
 
-        {/* CANVAS GRID */}
         <div style={{ display: 'flex', justifyContent: 'center', position: 'relative' }}>
           <canvas
             ref={canvasRef}
             width={GRID_WIDTH * PIXEL_SIZE}
             height={(GRID_HEIGHT + 1) * PIXEL_SIZE}
+            onClick={handleCanvasClick}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
             style={{
               border: '1px solid #555',
               cursor: 'crosshair'
             }}
           />
+          
+          {/* Tooltip for sold pixels */}
+          {hoveredPixel && (
+            <div style={{
+              position: 'fixed',
+              left: hoveredPixel.x + 10,
+              top: hoveredPixel.y + 10,
+              backgroundColor: '#000',
+              border: '1px solid #ff1493',
+              padding: '8px 12px',
+              borderRadius: '5px',
+              fontSize: '12px',
+              pointerEvents: 'none',
+              zIndex: 1000
+            }}>
+              <div style={{ color: '#ff1493', fontWeight: 'bold' }}>{hoveredPixel.company}</div>
+              <div style={{ color: '#888' }}>Click to visit</div>
+            </div>
+          )}
         </div>
 
-        {/* SELECTION INFO */}
         {selectionInfo && selectionEnd && (
           <div style={{
             position: 'fixed',
@@ -480,27 +610,68 @@ export default function Home() {
             <p style={{ margin: '5px 0', fontSize: '24px', fontWeight: 'bold', color: '#0f0' }}>
               ${selectionInfo.price.toLocaleString()}
             </p>
-            <button 
-              disabled={selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0}
-              style={{
-                marginTop: '15px',
-                padding: '12px 30px',
-                backgroundColor: (selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0) ? '#555' : '#ff1493',
-                color: '#fff',
-                border: 'none',
-                fontSize: '18px',
-                fontWeight: 'bold',
-                cursor: (selectionInfo.unavailable.sold.length > 0 || selectionInfo.unavailable.reserved.length > 0) ? 'not-allowed' : 'pointer',
-                borderRadius: '5px'
-              }}>
-              Buy Now
-            </button>
+
+            {!showCheckout ? (
+              <button 
+                onClick={handleBuyClick}
+                disabled={!canBuy}
+                style={{
+                  marginTop: '15px',
+                  padding: '12px 30px',
+                  backgroundColor: canBuy ? '#ff1493' : '#555',
+                  color: '#fff',
+                  border: 'none',
+                  fontSize: '18px',
+                  fontWeight: 'bold',
+                  cursor: canBuy ? 'pointer' : 'not-allowed',
+                  borderRadius: '5px'
+                }}>
+                Buy Now
+              </button>
+            ) : (
+              <div style={{ marginTop: '15px' }}>
+                <input
+                  type="email"
+                  placeholder="Your email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    marginBottom: '10px',
+                    backgroundColor: '#000',
+                    border: '2px solid #333',
+                    color: '#fff',
+                    borderRadius: '5px',
+                    fontSize: '14px'
+                  }}
+                />
+                {checkoutError && (
+                  <p style={{ color: '#ff0000', fontSize: '12px', marginBottom: '10px' }}>{checkoutError}</p>
+                )}
+                <button 
+                  onClick={handleCheckout}
+                  disabled={checkoutLoading}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    backgroundColor: checkoutLoading ? '#555' : '#0f0',
+                    color: '#000',
+                    border: 'none',
+                    fontSize: '16px',
+                    fontWeight: 'bold',
+                    cursor: checkoutLoading ? 'not-allowed' : 'pointer',
+                    borderRadius: '5px'
+                  }}>
+                  {checkoutLoading ? 'Processing...' : 'Proceed to Payment'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
       </div>
 
-      {/* BOTTOM TEXT */}
       <div style={{
         textAlign: 'center',
         padding: '40px 20px',
