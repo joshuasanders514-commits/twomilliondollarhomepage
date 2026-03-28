@@ -6,19 +6,9 @@ import { supabase } from './lib/supabase';
 export default function Home() {
   const GRID_WIDTH = 400;
   const GRID_HEIGHT = 250;
-  const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT; // 100,000
+  const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT;
   const PIXEL_SIZE = 3;
-  
-  // Tiered pricing: $30 for 1-9, $20 for 10-99, $10 for 100+
-  const getPricePerPixel = (quantity: number): number => {
-    if (quantity >= 100) return 10;
-    if (quantity >= 10) return 20;
-    return 30;
-  };
-  
-  const calculatePrice = (quantity: number): number => {
-    return quantity * getPricePerPixel(quantity);
-  };
+  const PRICE_PER_PIXEL = 20;
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [availablePixels, setAvailablePixels] = useState(TOTAL_PIXELS);
@@ -218,34 +208,28 @@ export default function Home() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Background
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Available pixels
     ctx.fillStyle = '#666';
     ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
 
-    // Draw purchase groups - one image stretched across all pixels in the purchase
     purchaseGroups.forEach((group) => {
       const img = loadedImages.get(group.image_url);
       const { minX, minY, maxX, maxY } = group.bounds;
       const width = (maxX - minX + 1) * PIXEL_SIZE;
       const height = (maxY - minY + 1) * PIXEL_SIZE;
       
-      // Always draw white background first for sold pixels
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
       
       if (img) {
-        // Enable image smoothing for better quality
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
       }
     });
 
-    // Reserved pixels
     ctx.fillStyle = '#ffd700';
     reservedPixels.forEach(pixelId => {
       const coords = getPixelCoords(pixelId);
@@ -253,7 +237,6 @@ export default function Home() {
       ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
-    // Grid lines
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= GRID_WIDTH; i++) {
@@ -269,7 +252,6 @@ export default function Home() {
       ctx.stroke();
     }
 
-    // Selection overlay
     if (selectionStart && selectionEnd) {
       const startX = Math.min(selectionStart.x, selectionEnd.x);
       const startY = Math.min(selectionStart.y, selectionEnd.y);
@@ -380,12 +362,11 @@ export default function Home() {
     const width = Math.abs(selectionEnd.x - selectionStart.x) + 1;
     const height = Math.abs(selectionEnd.y - selectionStart.y) + 1;
     const pixelCount = width * height;
-    const price = calculatePrice(pixelCount);
-    const pricePerPixel = getPricePerPixel(pixelCount);
+    const price = pixelCount * PRICE_PER_PIXEL;
     const selectedIds = getSelectedPixelIds();
     const unavailable = getUnavailableInSelection();
 
-    return { width, height, pixelCount, price, pricePerPixel, selectedIds, unavailable };
+    return { width, height, pixelCount, price, selectedIds, unavailable };
   };
 
   const selectionInfo = getSelectionInfo();
@@ -433,7 +414,6 @@ export default function Home() {
 
       <div style={{ padding: '20px 50px', maxWidth: '1400px', margin: '0 auto' }}>
         
-        {/* Sponsor blocks row */}
         <div style={{
           display: 'flex',
           justifyContent: 'center',
@@ -451,7 +431,6 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Pink instruction text */}
         <h2 style={{ 
           color: '#ff1493', 
           textAlign: 'center', 
@@ -462,7 +441,6 @@ export default function Home() {
           Pixel Grid — Click and drag to select pixels, or choose a popular size:
         </h2>
 
-        {/* Pricing blocks row */}
         <div style={{
           display: 'flex',
           justifyContent: 'center',
@@ -471,7 +449,6 @@ export default function Home() {
           marginBottom: '20px',
           flexWrap: 'wrap'
         }}>
-          {/* $30 block - green border */}
           <div style={{
             padding: '12px 20px',
             backgroundColor: '#1a1a1a',
@@ -487,7 +464,6 @@ export default function Home() {
             <div style={{ fontSize: '12px', color: '#888', marginTop: '5px' }}>1-9 pixels</div>
           </div>
           
-          {/* $20 block - pink with POPULAR badge */}
           <div style={{
             padding: '12px 20px',
             backgroundColor: '#ff1493',
@@ -517,7 +493,6 @@ export default function Home() {
             <div style={{ fontSize: '12px', color: '#fff', marginTop: '5px' }}>10-99 pixels</div>
           </div>
           
-          {/* $10 block - green border */}
           <div style={{
             padding: '12px 20px',
             backgroundColor: '#1a1a1a',
@@ -588,7 +563,7 @@ export default function Home() {
             <p style={{ margin: '5px 0' }}>Size: {selectionInfo.width} × {selectionInfo.height}</p>
             <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount.toLocaleString()}</p>
             <p style={{ margin: '5px 0', fontSize: '12px', color: '#888' }}>
-              @ ${selectionInfo.pricePerPixel}/pixel
+              @ $20/pixel
             </p>
             
             {selectionInfo.unavailable.sold.length > 0 && (
@@ -666,7 +641,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Footer info */}
         <div style={{ 
           textAlign: 'center', 
           marginTop: '20px', 
