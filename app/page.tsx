@@ -4,19 +4,28 @@ import { useState, useRef, useEffect } from 'react';
 import { supabase } from './lib/supabase';
 
 export default function Home() {
-  const GRID_WIDTH = 316;
-  const GRID_HEIGHT = 316;
-  const EXTRA_ROW_PIXELS = 144;
-  const TOTAL_PIXELS = (GRID_WIDTH * GRID_HEIGHT) + EXTRA_ROW_PIXELS;
-  const PIXEL_SIZE = 5;
-  const PRICE_PER_PIXEL = 20;
+  const GRID_WIDTH = 400;
+  const GRID_HEIGHT = 250;
+  const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT; // 100,000
+  const PIXEL_SIZE = 3;
+  
+  // Tiered pricing: $30 for 1-9, $20 for 10-99, $10 for 100+
+  const getPricePerPixel = (quantity: number): number => {
+    if (quantity >= 100) return 10;
+    if (quantity >= 10) return 20;
+    return 30;
+  };
+  
+  const calculatePrice = (quantity: number): number => {
+    return quantity * getPricePerPixel(quantity);
+  };
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [availablePixels, setAvailablePixels] = useState(TOTAL_PIXELS);
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<{x: number, y: number} | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{x: number, y: number} | null>(null);
-  const [soldPixels, setSoldPixels] = useState<Map<number, {image_url: string, website_url: string, company_name: string}>>(new Map());
+  const [soldPixels, setSoldPixels] = useState<Map<number, {image_url: string, website_url: string, company_name: string, purchase_id: string}>>(new Map());
   const [reservedPixels, setReservedPixels] = useState<Set<number>>(new Set());
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -25,18 +34,20 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
   const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
   const [hoveredPixel, setHoveredPixel] = useState<{id: number, company: string, x: number, y: number} | null>(null);
+  const [purchaseGroups, setPurchaseGroups] = useState<Map<string, {pixelIds: number[], image_url: string, website_url: string, company_name: string, bounds: {minX: number, minY: number, maxX: number, maxY: number}}>>(new Map());
 
-  const batchOptions = [
-    { size: '2×2', pixels: 4, price: 75, width: 2, height: 2 },
-    { size: '5×5', pixels: 25, price: 475, width: 5, height: 5, popular: true },
-    { size: '10×10', pixels: 100, price: 1900, width: 10, height: 10 },
-    { size: '20×20', pixels: 400, price: 7500, width: 20, height: 20 }
-  ];
+  const getPixelCoords = (pixelId: number): {x: number, y: number} | null => {
+    if (pixelId < 1 || pixelId > TOTAL_PIXELS) return null;
+    return {
+      x: (pixelId - 1) % GRID_WIDTH,
+      y: Math.floor((pixelId - 1) / GRID_WIDTH)
+    };
+  };
 
   useEffect(() => {
     const imageUrls = new Set<string>();
-    soldPixels.forEach(pixel => {
-      if (pixel.image_url) imageUrls.add(pixel.image_url);
+    purchaseGroups.forEach(group => {
+      if (group.image_url) imageUrls.add(group.image_url);
     });
 
     imageUrls.forEach(url => {
@@ -49,14 +60,14 @@ export default function Home() {
         img.src = url;
       }
     });
-  }, [soldPixels]);
+  }, [purchaseGroups]);
 
   useEffect(() => {
     async function loadPixels() {
       try {
         const { data, error } = await supabase
           .from('pixels')
-          .select('id, status, image_url, website_url, company_name')
+          .select('id, status, image_url, website_url, company_name, purchase_id')
           .in('status', ['sold', 'reserved', 'pending']);
 
         if (error) {
@@ -67,16 +78,40 @@ export default function Home() {
 
         setDbConnected(true);
 
-        const sold = new Map<number, {image_url: string, website_url: string, company_name: string}>();
+        const sold = new Map<number, {image_url: string, website_url: string, company_name: string, purchase_id: string}>();
         const reserved = new Set<number>();
+        const groups = new Map<string, {pixelIds: number[], image_url: string, website_url: string, company_name: string, bounds: {minX: number, minY: number, maxX: number, maxY: number}}>();
 
         data?.forEach(pixel => {
           if (pixel.status === 'sold') {
             sold.set(pixel.id, {
               image_url: pixel.image_url || '',
               website_url: pixel.website_url || '',
-              company_name: pixel.company_name || ''
+              company_name: pixel.company_name || '',
+              purchase_id: pixel.purchase_id || ''
             });
+
+            if (pixel.purchase_id) {
+              const coords = getPixelCoords(pixel.id);
+              if (coords) {
+                if (!groups.has(pixel.purchase_id)) {
+                  groups.set(pixel.purchase_id, {
+                    pixelIds: [pixel.id],
+                    image_url: pixel.image_url || '',
+                    website_url: pixel.website_url || '',
+                    company_name: pixel.company_name || '',
+                    bounds: { minX: coords.x, minY: coords.y, maxX: coords.x, maxY: coords.y }
+                  });
+                } else {
+                  const group = groups.get(pixel.purchase_id)!;
+                  group.pixelIds.push(pixel.id);
+                  group.bounds.minX = Math.min(group.bounds.minX, coords.x);
+                  group.bounds.minY = Math.min(group.bounds.minY, coords.y);
+                  group.bounds.maxX = Math.max(group.bounds.maxX, coords.x);
+                  group.bounds.maxY = Math.max(group.bounds.maxY, coords.y);
+                }
+              }
+            }
           } else if (pixel.status === 'reserved') {
             reserved.add(pixel.id);
           } else if (pixel.status === 'pending') {
@@ -86,6 +121,7 @@ export default function Home() {
 
         setSoldPixels(sold);
         setReservedPixels(reserved);
+        setPurchaseGroups(groups);
         setAvailablePixels(TOTAL_PIXELS - sold.size - reserved.size);
       } catch (err) {
         console.error('Connection error:', err);
@@ -97,31 +133,8 @@ export default function Home() {
   }, []);
 
   const getPixelId = (x: number, y: number): number | null => {
-    if (y < GRID_HEIGHT) {
-      return (y * GRID_WIDTH) + x + 1;
-    } else if (y === GRID_HEIGHT) {
-      const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
-      if (x >= extraRowStartX && x < extraRowStartX + EXTRA_ROW_PIXELS) {
-        return (GRID_WIDTH * GRID_HEIGHT) + (x - extraRowStartX) + 1;
-      }
-    }
-    return null;
-  };
-
-  const getPixelCoords = (pixelId: number): {x: number, y: number} | null => {
-    const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
-    if (pixelId <= GRID_WIDTH * GRID_HEIGHT) {
-      return {
-        x: (pixelId - 1) % GRID_WIDTH,
-        y: Math.floor((pixelId - 1) / GRID_WIDTH)
-      };
-    } else {
-      const extraIndex = pixelId - (GRID_WIDTH * GRID_HEIGHT) - 1;
-      return {
-        x: extraRowStartX + extraIndex,
-        y: GRID_HEIGHT
-      };
-    }
+    if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return null;
+    return (y * GRID_WIDTH) + x + 1;
   };
 
   const getSelectedPixelIds = (): number[] => {
@@ -149,15 +162,6 @@ export default function Home() {
     const sold = selectedIds.filter(id => soldPixels.has(id));
     const reserved = selectedIds.filter(id => reservedPixels.has(id));
     return { sold, reserved };
-  };
-
-  const handleBatchSelect = (width: number, height: number, discountedPrice: number) => {
-    const centerX = Math.floor(GRID_WIDTH / 2) - Math.floor(width / 2);
-    const startY = 0;
-    
-    setSelectionStart({ x: centerX, y: startY });
-    setSelectionEnd({ x: centerX + width - 1, y: startY + height - 1 });
-    setShowCheckout(false);
   };
 
   const handleBuyClick = () => {
@@ -214,28 +218,30 @@ export default function Home() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Background
     ctx.fillStyle = '#1a1a1a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Available pixels
     ctx.fillStyle = '#666';
     ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
 
-    const extraRowStartX = Math.floor((GRID_WIDTH - EXTRA_ROW_PIXELS) / 2);
-    ctx.fillRect(extraRowStartX * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE, EXTRA_ROW_PIXELS * PIXEL_SIZE, PIXEL_SIZE);
-
-    soldPixels.forEach((info, pixelId) => {
-      const coords = getPixelCoords(pixelId);
-      if (!coords) return;
+    // Draw purchase groups - one image stretched across all pixels in the purchase
+    purchaseGroups.forEach((group) => {
+      const img = loadedImages.get(group.image_url);
+      const { minX, minY, maxX, maxY } = group.bounds;
+      const width = (maxX - minX + 1) * PIXEL_SIZE;
+      const height = (maxY - minY + 1) * PIXEL_SIZE;
       
-      const img = loadedImages.get(info.image_url);
       if (img) {
-        ctx.drawImage(img, coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+        ctx.drawImage(img, minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
       } else {
         ctx.fillStyle = '#ff1493';
-        ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+        ctx.fillRect(minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
       }
     });
 
+    // Reserved pixels
     ctx.fillStyle = '#ffd700';
     reservedPixels.forEach(pixelId => {
       const coords = getPixelCoords(pixelId);
@@ -243,6 +249,7 @@ export default function Home() {
       ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
+    // Grid lines
     ctx.strokeStyle = '#333';
     ctx.lineWidth = 0.5;
     for (let i = 0; i <= GRID_WIDTH; i++) {
@@ -258,17 +265,7 @@ export default function Home() {
       ctx.stroke();
     }
 
-    for (let i = 0; i <= EXTRA_ROW_PIXELS; i++) {
-      ctx.beginPath();
-      ctx.moveTo((extraRowStartX + i) * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
-      ctx.lineTo((extraRowStartX + i) * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
-      ctx.stroke();
-    }
-    ctx.beginPath();
-    ctx.moveTo(extraRowStartX * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
-    ctx.lineTo((extraRowStartX + EXTRA_ROW_PIXELS) * PIXEL_SIZE, (GRID_HEIGHT + 1) * PIXEL_SIZE);
-    ctx.stroke();
-
+    // Selection overlay
     if (selectionStart && selectionEnd) {
       const startX = Math.min(selectionStart.x, selectionEnd.x);
       const startY = Math.min(selectionStart.y, selectionEnd.y);
@@ -296,7 +293,7 @@ export default function Home() {
 
   useEffect(() => {
     drawGrid();
-  }, [selectionStart, selectionEnd, soldPixels, reservedPixels, loadedImages]);
+  }, [selectionStart, selectionEnd, soldPixels, reservedPixels, loadedImages, purchaseGroups]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -379,20 +376,28 @@ export default function Home() {
     const width = Math.abs(selectionEnd.x - selectionStart.x) + 1;
     const height = Math.abs(selectionEnd.y - selectionStart.y) + 1;
     const pixelCount = width * height;
-    
-    const matchingBatch = batchOptions.find(
-      opt => opt.width === width && opt.height === height
-    );
-    
-    const price = matchingBatch ? matchingBatch.price : pixelCount * PRICE_PER_PIXEL;
+    const price = calculatePrice(pixelCount);
+    const pricePerPixel = getPricePerPixel(pixelCount);
     const selectedIds = getSelectedPixelIds();
     const unavailable = getUnavailableInSelection();
 
-    return { width, height, pixelCount, price, selectedIds, unavailable };
+    return { width, height, pixelCount, price, pricePerPixel, selectedIds, unavailable };
   };
 
   const selectionInfo = getSelectionInfo();
   const canBuy = selectionInfo && selectionInfo.unavailable.sold.length === 0 && selectionInfo.unavailable.reserved.length === 0;
+
+  const sponsorBlockStyle = {
+    padding: '12px 20px',
+    backgroundColor: '#1a1a1a',
+    color: '#888',
+    border: '2px dashed #555',
+    fontSize: '14px',
+    fontWeight: 'bold' as const,
+    borderRadius: '5px',
+    textAlign: 'center' as const,
+    minWidth: '120px'
+  };
 
   return (
     <div style={{ 
@@ -422,117 +427,106 @@ export default function Home() {
         </div>
       </nav>
 
-      <div style={{ padding: '30px', maxWidth: '1400px', margin: '0 auto' }}>
+      <div style={{ padding: '20px 50px', maxWidth: '1400px', margin: '0 auto' }}>
         
-        <div style={{
-          width: '100%',
-          maxWidth: '1000px',
-          height: '60px',
-          backgroundColor: '#1a1a1a',
-          border: '2px dashed #555',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          margin: '0 auto 15px',
-          color: '#888',
-          fontSize: '14px'
-        }}>
-          Title Sponsor Available - Email for Pricing
-        </div>
-
+        {/* Sponsor blocks row */}
         <div style={{
           display: 'flex',
-          gap: '8px',
           justifyContent: 'center',
-          marginBottom: '25px',
-          flexWrap: 'wrap'
+          alignItems: 'stretch',
+          gap: '10px',
+          marginBottom: '20px',
+          flexWrap: 'nowrap',
+          padding: '0 20px'
         }}>
           {[1, 2, 3, 4, 5, 6].map(num => (
-            <div key={num} style={{
-              width: '75px',
-              height: '75px',
-              backgroundColor: '#1a1a1a',
-              border: '2px dashed #555',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#888',
-              fontSize: '10px',
-              textAlign: 'center',
-              padding: '5px'
-            }}>
-              Sponsor {num}
+            <div key={`sponsor-${num}`} style={sponsorBlockStyle}>
+              <div>Sponsor {num}</div>
+              <div style={{ fontSize: '16px', marginTop: '5px', color: '#fff' }}>$10,000</div>
             </div>
           ))}
         </div>
 
-        <div style={{ textAlign: 'center', marginBottom: '15px' }}>
-          <h2 style={{ color: '#ff1493', margin: '0 0 8px', fontSize: '14px', fontWeight: 'normal' }}>
-            316×316 Pixel Grid — Click and drag to select pixels, or choose a popular size:
-          </h2>
-          
-          <div style={{ 
-            display: 'flex', 
-            gap: '10px', 
-            justifyContent: 'center', 
-            flexWrap: 'wrap',
-            marginBottom: '15px'
+        {/* Pink instruction text */}
+        <h2 style={{ 
+          color: '#ff1493', 
+          textAlign: 'center', 
+          margin: '0 0 15px', 
+          fontSize: '18px', 
+          fontWeight: 'normal' 
+        }}>
+          Pixel Grid — Click and drag to select pixels, or choose a popular size:
+        </h2>
+
+        {/* Pricing blocks row */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'stretch',
+          gap: '10px',
+          marginBottom: '20px',
+          flexWrap: 'wrap'
+        }}>
+          {/* $30 block - green border */}
+          <div style={{
+            padding: '12px 20px',
+            backgroundColor: '#1a1a1a',
+            color: '#fff',
+            border: '2px solid #0f0',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            borderRadius: '5px',
+            textAlign: 'center',
+            minWidth: '120px'
           }}>
-            {batchOptions.map((option) => (
-              <button
-                key={option.size}
-                onClick={() => handleBatchSelect(option.width, option.height, option.price)}
-                style={{
-                  padding: '12px 20px',
-                  backgroundColor: option.popular ? '#ff1493' : '#1a1a1a',
-                  color: '#fff',
-                  border: option.popular ? '2px solid #ff1493' : '2px solid #555',
-                  fontSize: '14px',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  borderRadius: '5px',
-                  position: 'relative'
-                }}
-              >
-                {option.popular && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '-8px',
-                    right: '-8px',
-                    backgroundColor: '#0f0',
-                    color: '#000',
-                    fontSize: '10px',
-                    padding: '2px 6px',
-                    borderRadius: '3px',
-                    fontWeight: 'bold'
-                  }}>
-                    POPULAR
-                  </div>
-                )}
-                <div>{option.size}</div>
-                <div style={{ fontSize: '16px', marginTop: '5px' }}>${option.price.toLocaleString()}</div>
-                <div style={{ fontSize: '11px', color: '#aaa' }}>save ${(option.pixels * PRICE_PER_PIXEL - option.price)}</div>
-              </button>
-            ))}
-            <button
-              onClick={() => {
-                setSelectionStart(null);
-                setSelectionEnd(null);
-                setShowCheckout(false);
-              }}
-              style={{
-                padding: '12px 20px',
-                backgroundColor: '#1a1a1a',
-                color: '#fff',
-                border: '2px solid #555',
-                fontSize: '14px',
-                fontWeight: 'bold',
-                cursor: 'pointer',
-                borderRadius: '5px'
-              }}
-            >
-              Custom<br/>Size
-            </button>
+            <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f0' }}>$30</div>
+            <div style={{ fontSize: '12px', color: '#888', marginTop: '5px' }}>1-9 pixels</div>
+          </div>
+          
+          {/* $20 block - pink with POPULAR badge */}
+          <div style={{
+            padding: '12px 20px',
+            backgroundColor: '#ff1493',
+            color: '#fff',
+            border: '2px solid #ff1493',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            borderRadius: '5px',
+            textAlign: 'center',
+            minWidth: '120px',
+            position: 'relative'
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: '-10px',
+              right: '-10px',
+              backgroundColor: '#0f0',
+              color: '#000',
+              fontSize: '10px',
+              padding: '3px 8px',
+              borderRadius: '3px',
+              fontWeight: 'bold'
+            }}>
+              POPULAR
+            </div>
+            <div style={{ fontSize: '20px', fontWeight: 'bold' }}>$20</div>
+            <div style={{ fontSize: '12px', color: '#fff', marginTop: '5px' }}>10-99 pixels</div>
+          </div>
+          
+          {/* $10 block - green border */}
+          <div style={{
+            padding: '12px 20px',
+            backgroundColor: '#1a1a1a',
+            color: '#fff',
+            border: '2px solid #0f0',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            borderRadius: '5px',
+            textAlign: 'center',
+            minWidth: '120px'
+          }}>
+            <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f0' }}>$10</div>
+            <div style={{ fontSize: '12px', color: '#888', marginTop: '5px' }}>100+ pixels</div>
           </div>
         </div>
 
@@ -540,7 +534,7 @@ export default function Home() {
           <canvas
             ref={canvasRef}
             width={GRID_WIDTH * PIXEL_SIZE}
-            height={(GRID_HEIGHT + 1) * PIXEL_SIZE}
+            height={GRID_HEIGHT * PIXEL_SIZE}
             onClick={handleCanvasClick}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -583,13 +577,14 @@ export default function Home() {
             maxWidth: '300px',
             textAlign: 'center',
             boxShadow: '0 4px 20px rgba(255, 20, 147, 0.5)',
-            zIndex: 1000
+            zIndex: 1000,
+            borderRadius: '8px'
           }}>
             <h3 style={{ color: '#ff1493', margin: '0 0 15px' }}>Your Selection</h3>
             <p style={{ margin: '5px 0' }}>Size: {selectionInfo.width} × {selectionInfo.height}</p>
-            <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount}</p>
+            <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount.toLocaleString()}</p>
             <p style={{ margin: '5px 0', fontSize: '12px', color: '#888' }}>
-              IDs: {selectionInfo.selectedIds.slice(0, 5).join(', ')}{selectionInfo.selectedIds.length > 5 ? '...' : ''}
+              @ ${selectionInfo.pricePerPixel}/pixel
             </p>
             
             {selectionInfo.unavailable.sold.length > 0 && (
@@ -599,11 +594,11 @@ export default function Home() {
             )}
             {selectionInfo.unavailable.reserved.length > 0 && (
               <p style={{ margin: '5px 0', color: '#ffd700', fontSize: '12px' }}>
-                ⚠️ {selectionInfo.unavailable.reserved.length} pixel(s) reserved for auction
+                ⚠️ {selectionInfo.unavailable.reserved.length} pixel(s) reserved
               </p>
             )}
             
-            <p style={{ margin: '5px 0', fontSize: '24px', fontWeight: 'bold', color: '#0f0' }}>
+            <p style={{ margin: '10px 0', fontSize: '28px', fontWeight: 'bold', color: '#0f0' }}>
               ${selectionInfo.price.toLocaleString()}
             </p>
 
@@ -612,7 +607,7 @@ export default function Home() {
                 onClick={handleBuyClick}
                 disabled={!canBuy}
                 style={{
-                  marginTop: '15px',
+                  marginTop: '10px',
                   padding: '12px 30px',
                   backgroundColor: canBuy ? '#ff1493' : '#555',
                   color: '#fff',
@@ -625,7 +620,7 @@ export default function Home() {
                 Buy Now
               </button>
             ) : (
-              <div style={{ marginTop: '15px' }}>
+              <div style={{ marginTop: '10px' }}>
                 <input
                   type="email"
                   placeholder="Your email"
@@ -639,7 +634,8 @@ export default function Home() {
                     border: '2px solid #333',
                     color: '#fff',
                     borderRadius: '5px',
-                    fontSize: '14px'
+                    fontSize: '14px',
+                    boxSizing: 'border-box'
                   }}
                 />
                 {checkoutError && (
@@ -666,15 +662,22 @@ export default function Home() {
           </div>
         )}
 
-      </div>
+        {/* Footer info */}
+        <div style={{ 
+          textAlign: 'center', 
+          marginTop: '20px', 
+          padding: '15px',
+          color: '#666',
+          fontSize: '12px'
+        }}>
+          <p style={{ margin: '0 0 10px' }}>
+            100,000 pixels • Each pixel becomes an NFT when the grid sells out
+          </p>
+          <p style={{ margin: '0', color: '#ff1493', fontSize: '24px', fontWeight: 'bold' }}>
+            Stitch go boom what's up, Hello Micah
+          </p>
+        </div>
 
-      <div style={{
-        textAlign: 'center',
-        padding: '40px 20px',
-        color: '#ff1493',
-        fontSize: '24px'
-      }}>
-        Stitch Go Boom What's Up Hello, Micah!
       </div>
     </div>
   );
