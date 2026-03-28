@@ -8,7 +8,17 @@ export default function Home() {
   const GRID_HEIGHT = 250;
   const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT;
   const PIXEL_SIZE = 3;
-  const PRICE_PER_PIXEL = 20;
+  
+  // Tiered pricing: $30 for 1-9, $20 for 10-99, $10 for 100+
+  const getPricePerPixel = (quantity: number): number => {
+    if (quantity >= 100) return 10;
+    if (quantity >= 10) return 20;
+    return 30;
+  };
+  
+  const calculatePrice = (quantity: number): number => {
+    return quantity * getPricePerPixel(quantity);
+  };
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [availablePixels, setAvailablePixels] = useState(TOTAL_PIXELS);
@@ -366,11 +376,12 @@ export default function Home() {
     const width = Math.abs(selectionEnd.x - selectionStart.x) + 1;
     const height = Math.abs(selectionEnd.y - selectionStart.y) + 1;
     const pixelCount = width * height;
-    const price = pixelCount * PRICE_PER_PIXEL;
+    const price = calculatePrice(pixelCount);
+    const pricePerPixel = getPricePerPixel(pixelCount);
     const selectedIds = getSelectedPixelIds();
     const unavailable = getUnavailableInSelection();
 
-    return { width, height, pixelCount, price, selectedIds, unavailable };
+    return { width, height, pixelCount, price, pricePerPixel, selectedIds, unavailable };
   };
 
   const selectionInfo = getSelectionInfo();
@@ -567,7 +578,7 @@ export default function Home() {
             <p style={{ margin: '5px 0' }}>Size: {selectionInfo.width} × {selectionInfo.height}</p>
             <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount.toLocaleString()}</p>
             <p style={{ margin: '5px 0', fontSize: '12px', color: '#888' }}>
-              @ $20/pixel
+              @ ${selectionInfo.pricePerPixel}/pixel
             </p>
             
             {selectionInfo.unavailable.sold.length > 0 && (
