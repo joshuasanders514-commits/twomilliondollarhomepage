@@ -233,11 +233,15 @@ export default function Home() {
       const width = (maxX - minX + 1) * PIXEL_SIZE;
       const height = (maxY - minY + 1) * PIXEL_SIZE;
       
+      // Always draw white background first for sold pixels
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
+      
       if (img) {
+        // Enable image smoothing for better quality
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
-      } else {
-        ctx.fillStyle = '#ff1493';
-        ctx.fillRect(minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
       }
     });
 
