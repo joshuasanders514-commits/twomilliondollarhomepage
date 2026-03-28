@@ -214,6 +214,23 @@ export default function Home() {
     ctx.fillStyle = '#666';
     ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
 
+    // Draw grid lines FIRST (before sold pixels)
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= GRID_WIDTH; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * PIXEL_SIZE, 0);
+      ctx.lineTo(i * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
+      ctx.stroke();
+    }
+    for (let i = 0; i <= GRID_HEIGHT; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, i * PIXEL_SIZE);
+      ctx.lineTo(GRID_WIDTH * PIXEL_SIZE, i * PIXEL_SIZE);
+      ctx.stroke();
+    }
+
+    // Draw purchase groups AFTER grid lines (covers them up)
     purchaseGroups.forEach((group) => {
       const img = loadedImages.get(group.image_url);
       const { minX, minY, maxX, maxY } = group.bounds;
@@ -230,6 +247,7 @@ export default function Home() {
       }
     });
 
+    // Reserved pixels
     ctx.fillStyle = '#ffd700';
     reservedPixels.forEach(pixelId => {
       const coords = getPixelCoords(pixelId);
@@ -237,21 +255,7 @@ export default function Home() {
       ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
     });
 
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= GRID_WIDTH; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * PIXEL_SIZE, 0);
-      ctx.lineTo(i * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
-      ctx.stroke();
-    }
-    for (let i = 0; i <= GRID_HEIGHT; i++) {
-      ctx.beginPath();
-      ctx.moveTo(0, i * PIXEL_SIZE);
-      ctx.lineTo(GRID_WIDTH * PIXEL_SIZE, i * PIXEL_SIZE);
-      ctx.stroke();
-    }
-
+    // Selection overlay
     if (selectionStart && selectionEnd) {
       const startX = Math.min(selectionStart.x, selectionEnd.x);
       const startY = Math.min(selectionStart.y, selectionEnd.y);
