@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
             currency: 'usd',
             product_data: {
               name: `${pixelIds.length} Pixel${pixelIds.length > 1 ? 's' : ''} on 2M Homepage`,
-              description: `Pixel IDs: ${pixelIds.slice(0, 10).join(', ')}${pixelIds.length > 10 ? '...' : ''}`,
+              description: `Purchase ID: ${purchase.id}`,
             },
             unit_amount: price * 100,
           },
@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
       customer_email: email,
       metadata: {
         purchase_id: purchase.id,
-        pixel_ids: JSON.stringify(pixelIds),
+        pixel_count: pixelIds.length.toString(),
       },
     });
 
