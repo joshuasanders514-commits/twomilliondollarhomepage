@@ -14,32 +14,35 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { pixelIds, price, email } = body;
+    const { blockId, zone, x, y, w, h, pixels, price, email } = body;
 
-    const { data: pixels, error: checkError } = await supabase
-      .from('pixels')
-      .select('id, status')
-      .in('id', pixelIds);
+    // Check if block exists and its status
+    const { data: existingBlock, error: checkError } = await supabase
+      .from('blocks')
+      .select('block_id, status')
+      .eq('block_id', blockId)
+      .single();
 
-    if (checkError) {
+    if (checkError && checkError.code !== 'PGRST116') {
+      // PGRST116 = not found, which is okay
       return Response.json({ error: 'Database error' }, { status: 500 });
     }
 
-    const unavailable = pixels?.filter(p => p.status !== 'available') || [];
-    if (unavailable.length > 0) {
+    if (existingBlock && existingBlock.status !== 'available') {
       return Response.json({ 
-        error: 'Some pixels are no longer available', 
-        unavailableIds: unavailable.map(p => p.id) 
+        error: 'This block is no longer available'
       }, { status: 400 });
     }
 
+    // Create purchase record
     const { data: purchase, error: purchaseError } = await supabase
       .from('purchases')
       .insert({
         email,
-        pixel_count: pixelIds.length,
+        pixel_count: pixels,
         amount_paid: price * 100,
-        status: 'pending'
+        status: 'pending',
+        block_id: blockId
       })
       .select()
       .single();
@@ -48,13 +51,27 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'Failed to create purchase' }, { status: 500 });
     }
 
-    const { error: updateError } = await supabase
-      .from('pixels')
-      .update({ status: 'pending', purchase_id: purchase.id })
-      .in('id', pixelIds);
+    // Insert or update block as pending
+    const { error: upsertError } = await supabase
+      .from('blocks')
+      .upsert({
+        block_id: blockId,
+        zone: zone,
+        x: x,
+        y: y,
+        w: w,
+        h: h,
+        pixels: pixels,
+        price: price * 100,
+        status: 'pending',
+        email: email,
+        reserved_at: new Date().toISOString(),
+      }, {
+        onConflict: 'block_id'
+      });
 
-    if (updateError) {
-      return Response.json({ error: 'Failed to reserve pixels' }, { status: 500 });
+    if (upsertError) {
+      return Response.json({ error: 'Failed to reserve block' }, { status: 500 });
     }
 
     const session = await stripe.checkout.sessions.create({
@@ -64,8 +81,8 @@ export async function POST(request: NextRequest) {
           price_data: {
             currency: 'usd',
             product_data: {
-              name: `${pixelIds.length} Pixel${pixelIds.length > 1 ? 's' : ''} on 2M Homepage`,
-              description: `Purchase ID: ${purchase.id}`,
+              name: `${zone.charAt(0).toUpperCase() + zone.slice(1)} Block (${w}×${h}) on 2M Homepage`,
+              description: `${pixels} pixels at position (${x}, ${y}) • Purchase ID: ${purchase.id}`,
             },
             unit_amount: price * 100,
           },
@@ -78,9 +95,17 @@ export async function POST(request: NextRequest) {
       customer_email: email,
       metadata: {
         purchase_id: purchase.id,
-        pixel_count: pixelIds.length.toString(),
+        block_id: blockId,
+        zone: zone,
+        pixels: pixels.toString(),
       },
     });
+
+    // Update block with stripe session id
+    await supabase
+      .from('blocks')
+      .update({ stripe_session_id: session.id })
+      .eq('block_id', blockId);
 
     return Response.json({ url: session.url });
   } catch (error) {
