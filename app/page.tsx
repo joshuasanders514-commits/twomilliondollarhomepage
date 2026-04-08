@@ -178,6 +178,7 @@ export default function Home() {
   const [soldBlocks, setSoldBlocks] = useState<Map<string, SoldBlock>>(new Map());
   const [reservedBlocks, setReservedBlocks] = useState<Set<string>>(new Set());
   const [hoveredBlock, setHoveredBlock] = useState<Block | null>(null);
+  const [mousePos, setMousePos] = useState<{x: number, y: number}>({x: 0, y: 0});
   const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
@@ -415,6 +416,7 @@ export default function Home() {
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const block = getBlockAtPosition(e.clientX, e.clientY);
     setHoveredBlock(block);
+    setMousePos({x: e.clientX, y: e.clientY});
   };
 
   const handleMouseLeave = () => {
@@ -625,47 +627,6 @@ export default function Home() {
                 cursor: 'pointer'
               }}
             />
-
-            {/* Hover tooltip - positioned to the right of the canvas */}
-            {hoveredBlock && (
-              <div style={{
-                position: 'absolute',
-                left: (GRID_WIDTH * PIXEL_SIZE) + 20,
-                top: 0,
-                backgroundColor: '#000',
-                border: `2px solid ${ZONES.find(z => z.name === hoveredBlock.zone)?.color || '#fff'}`,
-                padding: '12px 16px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                pointerEvents: 'none',
-                whiteSpace: 'nowrap',
-                zIndex: 100,
-                minWidth: '150px'
-              }}>
-                {soldBlocks.has(hoveredBlock.id) ? (
-                  <>
-                    <div style={{ color: '#ff1493', fontWeight: 'bold', fontSize: '16px' }}>
-                      {soldBlocks.get(hoveredBlock.id)?.company_name || 'Sold'}
-                    </div>
-                    <div style={{ color: '#888', marginTop: '5px' }}>Click to visit</div>
-                  </>
-                ) : reservedBlocks.has(hoveredBlock.id) ? (
-                  <div style={{ color: '#ffd700', fontSize: '16px' }}>Reserved</div>
-                ) : (
-                  <>
-                    <div style={{ color: '#0f0', fontWeight: 'bold', fontSize: '24px' }}>
-                      {formatPrice(hoveredBlock.price)}
-                    </div>
-                    <div style={{ color: '#fff', marginTop: '8px' }}>
-                      {hoveredBlock.w}×{hoveredBlock.h} block • {hoveredBlock.pixels} pixels
-                    </div>
-                    <div style={{ color: '#888', marginTop: '4px', textTransform: 'capitalize' }}>
-                      {hoveredBlock.zone} zone
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Selection panel */}
@@ -782,6 +743,47 @@ export default function Home() {
             </div>
           )}
         </div>
+
+        {/* Hover tooltip - follows cursor, hides when block selected */}
+        {hoveredBlock && !selectedBlock && (
+          <div style={{
+            position: 'fixed',
+            left: mousePos.x + 20,
+            top: mousePos.y - 40,
+            backgroundColor: '#000',
+            border: `2px solid ${ZONES.find(z => z.name === hoveredBlock.zone)?.color || '#fff'}`,
+            padding: '12px 16px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+            zIndex: 100,
+            minWidth: '150px'
+          }}>
+            {soldBlocks.has(hoveredBlock.id) ? (
+              <>
+                <div style={{ color: '#ff1493', fontWeight: 'bold', fontSize: '16px' }}>
+                  {soldBlocks.get(hoveredBlock.id)?.company_name || 'Sold'}
+                </div>
+                <div style={{ color: '#888', marginTop: '5px' }}>Click to visit</div>
+              </>
+            ) : reservedBlocks.has(hoveredBlock.id) ? (
+              <div style={{ color: '#ffd700', fontSize: '16px' }}>Reserved</div>
+            ) : (
+              <>
+                <div style={{ color: '#0f0', fontWeight: 'bold', fontSize: '24px' }}>
+                  {formatPrice(hoveredBlock.price)}
+                </div>
+                <div style={{ color: '#fff', marginTop: '8px' }}>
+                  {hoveredBlock.w}×{hoveredBlock.h} block • {hoveredBlock.pixels} pixels
+                </div>
+                <div style={{ color: '#888', marginTop: '4px', textTransform: 'capitalize' }}>
+                  {hoveredBlock.zone} zone
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Footer info */}
         <div style={{ 
