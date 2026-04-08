@@ -189,9 +189,6 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
 
   // Calculate stats
-  const soldCount = soldBlocks.size;
-  const reservedCount = reservedBlocks.size;
-  const availableBlocks = allBlocks.length - soldCount - reservedCount;
   const soldPixels = Array.from(soldBlocks.keys()).reduce((sum, blockId) => {
     const block = allBlocks.find(b => b.id === blockId);
     return sum + (block?.pixels || 0);
@@ -296,8 +293,8 @@ export default function Home() {
       );
     }
 
-    // Draw grid lines for blocks
-    ctx.strokeStyle = '#333';
+    // Draw grid lines for blocks - WHITE lines
+    ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 0.5;
 
     // Draw block boundaries based on zones
@@ -556,7 +553,6 @@ export default function Home() {
         </a>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
           <span style={{ color: '#0f0' }}>{availablePixels.toLocaleString()} pixels left</span>
-          <span style={{ color: '#888' }}>({availableBlocks.toLocaleString()} blocks)</span>
           {dbConnected === true && <span style={{ color: '#0f0', fontSize: '12px' }}>● DB Connected</span>}
           {dbConnected === false && <span style={{ color: '#f00', fontSize: '12px' }}>● DB Error</span>}
           <a href="/about" style={{ color: '#fff', textDecoration: 'none' }}>About</a>
@@ -630,40 +626,40 @@ export default function Home() {
               }}
             />
 
-            {/* Hover tooltip */}
+            {/* Hover tooltip - positioned to the right of the canvas */}
             {hoveredBlock && (
               <div style={{
                 position: 'absolute',
-                left: (hoveredBlock.x + hoveredBlock.w / 2) * PIXEL_SIZE,
-                top: hoveredBlock.y * PIXEL_SIZE - 50,
-                transform: 'translateX(-50%)',
+                left: (GRID_WIDTH * PIXEL_SIZE) + 20,
+                top: 0,
                 backgroundColor: '#000',
                 border: `2px solid ${ZONES.find(z => z.name === hoveredBlock.zone)?.color || '#fff'}`,
-                padding: '8px 12px',
-                borderRadius: '5px',
-                fontSize: '12px',
+                padding: '12px 16px',
+                borderRadius: '8px',
+                fontSize: '14px',
                 pointerEvents: 'none',
                 whiteSpace: 'nowrap',
-                zIndex: 100
+                zIndex: 100,
+                minWidth: '150px'
               }}>
                 {soldBlocks.has(hoveredBlock.id) ? (
                   <>
-                    <div style={{ color: '#ff1493', fontWeight: 'bold' }}>
+                    <div style={{ color: '#ff1493', fontWeight: 'bold', fontSize: '16px' }}>
                       {soldBlocks.get(hoveredBlock.id)?.company_name || 'Sold'}
                     </div>
-                    <div style={{ color: '#888' }}>Click to visit</div>
+                    <div style={{ color: '#888', marginTop: '5px' }}>Click to visit</div>
                   </>
                 ) : reservedBlocks.has(hoveredBlock.id) ? (
-                  <div style={{ color: '#ffd700' }}>Reserved</div>
+                  <div style={{ color: '#ffd700', fontSize: '16px' }}>Reserved</div>
                 ) : (
                   <>
-                    <div style={{ color: '#0f0', fontWeight: 'bold' }}>
+                    <div style={{ color: '#0f0', fontWeight: 'bold', fontSize: '24px' }}>
                       {formatPrice(hoveredBlock.price)}
                     </div>
-                    <div style={{ color: '#888' }}>
-                      {hoveredBlock.w}×{hoveredBlock.h} • {hoveredBlock.pixels} pixels
+                    <div style={{ color: '#fff', marginTop: '8px' }}>
+                      {hoveredBlock.w}×{hoveredBlock.h} block • {hoveredBlock.pixels} pixels
                     </div>
-                    <div style={{ color: '#666', textTransform: 'capitalize' }}>
+                    <div style={{ color: '#888', marginTop: '4px', textTransform: 'capitalize' }}>
                       {hoveredBlock.zone} zone
                     </div>
                   </>
