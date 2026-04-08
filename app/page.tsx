@@ -1,53 +1,258 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { supabase } from './lib/supabase';
 
+// =============================================================================
+// ZONE CONFIGURATION - Pre-batched block system
+// =============================================================================
+
+interface ZoneConfig {
+  name: string;
+  zoneX: number;
+  zoneY: number;
+  zoneW: number;
+  zoneH: number;
+  blockW: number;
+  blockH: number;
+  price: number;
+  color: string;
+  hoverColor: string;
+}
+
+const GRID_WIDTH = 250;
+const GRID_HEIGHT = 400;
+const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT;
+const PIXEL_SIZE = 3;
+
+// Zone definitions from center outward (order matters for rendering)
+const ZONES: ZoneConfig[] = [
+  {
+    name: 'center',
+    zoneX: 105, zoneY: 185, zoneW: 40, zoneH: 30,
+    blockW: 40, blockH: 30,
+    price: 25000,
+    color: '#7F77DD',
+    hoverColor: '#9990FF'
+  },
+  {
+    name: 'premium',
+    zoneX: 85, zoneY: 170, zoneW: 80, zoneH: 60,
+    blockW: 20, blockH: 15,
+    price: 5000,
+    color: '#AFA9EC',
+    hoverColor: '#C5C0FF'
+  },
+  {
+    name: 'large',
+    zoneX: 70, zoneY: 120, zoneW: 110, zoneH: 160,
+    blockW: 10, blockH: 5,
+    price: 1000,
+    color: '#85B7EB',
+    hoverColor: '#A0CCFF'
+  },
+  {
+    name: 'medium',
+    zoneX: 30, zoneY: 80, zoneW: 190, zoneH: 240,
+    blockW: 5, blockH: 5,
+    price: 500,
+    color: '#5DCAA5',
+    hoverColor: '#7EDDBB'
+  },
+  {
+    name: 'small',
+    zoneX: 6, zoneY: 24, zoneW: 238, zoneH: 352,
+    blockW: 2, blockH: 2,
+    price: 100,
+    color: '#EF9F27',
+    hoverColor: '#FFB847'
+  },
+  {
+    name: 'tiny',
+    zoneX: 0, zoneY: 0, zoneW: 250, zoneH: 400,
+    blockW: 1, blockH: 1,
+    price: 30,
+    color: '#F09595',
+    hoverColor: '#FFAAAA'
+  }
+];
+
+interface Block {
+  id: string;
+  zone: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  pixels: number;
+  price: number;
+}
+
+interface SoldBlock {
+  block_id: string;
+  image_url: string;
+  website_url: string;
+  company_name: string;
+}
+
+// =============================================================================
+// GENERATE ALL PRE-BATCHED BLOCKS
+// =============================================================================
+
+function generateAllBlocks(): Block[] {
+  const blocks: Block[] = [];
+  const claimedPixels = new Set<string>();
+
+  // Process zones from center outward
+  for (const zone of ZONES) {
+    const { name, zoneX, zoneY, zoneW, zoneH, blockW, blockH, price } = zone;
+
+    for (let by = zoneY; by < zoneY + zoneH; by += blockH) {
+      for (let bx = zoneX; bx < zoneX + zoneW; bx += blockW) {
+        // Check if block extends beyond zone
+        if (bx + blockW > zoneX + zoneW || by + blockH > zoneY + zoneH) {
+          continue;
+        }
+
+        // Check if any pixel is already claimed
+        let hasClaimedPixel = false;
+        const blockPixels: string[] = [];
+
+        for (let py = by; py < by + blockH; py++) {
+          for (let px = bx; px < bx + blockW; px++) {
+            const key = `${px},${py}`;
+            if (claimedPixels.has(key)) {
+              hasClaimedPixel = true;
+              break;
+            }
+            blockPixels.push(key);
+          }
+          if (hasClaimedPixel) break;
+        }
+
+        if (hasClaimedPixel) continue;
+
+        // Claim pixels and create block
+        blockPixels.forEach(key => claimedPixels.add(key));
+
+        blocks.push({
+          id: `${name}_${bx}_${by}`,
+          zone: name,
+          x: bx,
+          y: by,
+          w: blockW,
+          h: blockH,
+          pixels: blockW * blockH,
+          price: price
+        });
+      }
+    }
+  }
+
+  return blocks;
+}
+
+// =============================================================================
+// MAIN COMPONENT
+// =============================================================================
+
 export default function Home() {
-  const GRID_WIDTH = 400;
-  const GRID_HEIGHT = 250;
-  const TOTAL_PIXELS = GRID_WIDTH * GRID_HEIGHT;
-  const PIXEL_SIZE = 3;
-  
-  // Tiered pricing: $30 for 1-9, $20 for 10-99, $10 for 100+
-  const getPricePerPixel = (quantity: number): number => {
-    if (quantity >= 100) return 10;
-    if (quantity >= 10) return 20;
-    return 30;
-  };
-  
-  const calculatePrice = (quantity: number): number => {
-    return quantity * getPricePerPixel(quantity);
-  };
-  
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [availablePixels, setAvailablePixels] = useState(TOTAL_PIXELS);
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [selectionStart, setSelectionStart] = useState<{x: number, y: number} | null>(null);
-  const [selectionEnd, setSelectionEnd] = useState<{x: number, y: number} | null>(null);
-  const [soldPixels, setSoldPixels] = useState<Map<number, {image_url: string, website_url: string, company_name: string, purchase_id: string}>>(new Map());
-  const [reservedPixels, setReservedPixels] = useState<Set<number>>(new Set());
+  
+  // Generate blocks once
+  const allBlocks = useMemo(() => generateAllBlocks(), []);
+  
+  // Create a spatial index for fast block lookup
+  const blockIndex = useMemo(() => {
+    const index = new Map<string, Block>();
+    allBlocks.forEach(block => {
+      for (let py = block.y; py < block.y + block.h; py++) {
+        for (let px = block.x; px < block.x + block.w; px++) {
+          index.set(`${px},${py}`, block);
+        }
+      }
+    });
+    return index;
+  }, [allBlocks]);
+
+  const [soldBlocks, setSoldBlocks] = useState<Map<string, SoldBlock>>(new Map());
+  const [reservedBlocks, setReservedBlocks] = useState<Set<string>>(new Set());
+  const [hoveredBlock, setHoveredBlock] = useState<Block | null>(null);
+  const [selectedBlock, setSelectedBlock] = useState<Block | null>(null);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
+  const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
+  
+  // Checkout state
   const [showCheckout, setShowCheckout] = useState(false);
   const [email, setEmail] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
-  const [loadedImages, setLoadedImages] = useState<Map<string, HTMLImageElement>>(new Map());
-  const [hoveredPixel, setHoveredPixel] = useState<{id: number, company: string, x: number, y: number} | null>(null);
-  const [purchaseGroups, setPurchaseGroups] = useState<Map<string, {pixelIds: number[], image_url: string, website_url: string, company_name: string, bounds: {minX: number, minY: number, maxX: number, maxY: number}}>>(new Map());
 
-  const getPixelCoords = (pixelId: number): {x: number, y: number} | null => {
-    if (pixelId < 1 || pixelId > TOTAL_PIXELS) return null;
-    return {
-      x: (pixelId - 1) % GRID_WIDTH,
-      y: Math.floor((pixelId - 1) / GRID_WIDTH)
-    };
-  };
+  // Calculate stats
+  const soldCount = soldBlocks.size;
+  const reservedCount = reservedBlocks.size;
+  const availableBlocks = allBlocks.length - soldCount - reservedCount;
+  const soldPixels = Array.from(soldBlocks.keys()).reduce((sum, blockId) => {
+    const block = allBlocks.find(b => b.id === blockId);
+    return sum + (block?.pixels || 0);
+  }, 0);
+  const availablePixels = TOTAL_PIXELS - soldPixels;
+
+  // =============================================================================
+  // LOAD DATA FROM DATABASE
+  // =============================================================================
+
+  useEffect(() => {
+    async function loadBlocks() {
+      try {
+        const { data, error } = await supabase
+          .from('blocks')
+          .select('block_id, status, image_url, website_url, company_name')
+          .in('status', ['sold', 'reserved', 'pending']);
+
+        if (error) {
+          console.error('Database error:', error);
+          setDbConnected(false);
+          return;
+        }
+
+        setDbConnected(true);
+
+        const sold = new Map<string, SoldBlock>();
+        const reserved = new Set<string>();
+
+        data?.forEach(row => {
+          if (row.status === 'sold') {
+            sold.set(row.block_id, {
+              block_id: row.block_id,
+              image_url: row.image_url || '',
+              website_url: row.website_url || '',
+              company_name: row.company_name || ''
+            });
+          } else {
+            reserved.add(row.block_id);
+          }
+        });
+
+        setSoldBlocks(sold);
+        setReservedBlocks(reserved);
+      } catch (err) {
+        console.error('Connection error:', err);
+        setDbConnected(false);
+      }
+    }
+
+    loadBlocks();
+  }, []);
+
+  // =============================================================================
+  // LOAD IMAGES
+  // =============================================================================
 
   useEffect(() => {
     const imageUrls = new Set<string>();
-    purchaseGroups.forEach(group => {
-      if (group.image_url) imageUrls.add(group.image_url);
+    soldBlocks.forEach(block => {
+      if (block.image_url) imageUrls.add(block.image_url);
     });
 
     imageUrls.forEach(url => {
@@ -60,109 +265,197 @@ export default function Home() {
         img.src = url;
       }
     });
-  }, [purchaseGroups]);
+  }, [soldBlocks]);
+
+  // =============================================================================
+  // DRAWING
+  // =============================================================================
+
+  const drawGrid = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Background
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw zone backgrounds (in reverse order so outer zones are drawn first)
+    for (let i = ZONES.length - 1; i >= 0; i--) {
+      const zone = ZONES[i];
+      ctx.fillStyle = zone.color + '40'; // 25% opacity
+      ctx.fillRect(
+        zone.zoneX * PIXEL_SIZE,
+        zone.zoneY * PIXEL_SIZE,
+        zone.zoneW * PIXEL_SIZE,
+        zone.zoneH * PIXEL_SIZE
+      );
+    }
+
+    // Draw grid lines for blocks
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+
+    // Draw block boundaries based on zones
+    allBlocks.forEach(block => {
+      ctx.strokeRect(
+        block.x * PIXEL_SIZE,
+        block.y * PIXEL_SIZE,
+        block.w * PIXEL_SIZE,
+        block.h * PIXEL_SIZE
+      );
+    });
+
+    // Draw sold blocks with images
+    soldBlocks.forEach((soldBlock, blockId) => {
+      const block = allBlocks.find(b => b.id === blockId);
+      if (!block) return;
+
+      const img = loadedImages.get(soldBlock.image_url);
+      const x = block.x * PIXEL_SIZE;
+      const y = block.y * PIXEL_SIZE;
+      const w = block.w * PIXEL_SIZE;
+      const h = block.h * PIXEL_SIZE;
+
+      // White background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, w, h);
+
+      // Draw image if loaded
+      if (img) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, x, y, w, h);
+      }
+
+      // Border
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, w, h);
+    });
+
+    // Draw reserved blocks
+    reservedBlocks.forEach(blockId => {
+      const block = allBlocks.find(b => b.id === blockId);
+      if (!block) return;
+
+      ctx.fillStyle = '#ffd70080';
+      ctx.fillRect(
+        block.x * PIXEL_SIZE,
+        block.y * PIXEL_SIZE,
+        block.w * PIXEL_SIZE,
+        block.h * PIXEL_SIZE
+      );
+    });
+
+    // Draw hovered block highlight
+    if (hoveredBlock && !soldBlocks.has(hoveredBlock.id) && !reservedBlocks.has(hoveredBlock.id)) {
+      const zone = ZONES.find(z => z.name === hoveredBlock.zone);
+      ctx.fillStyle = zone?.hoverColor + 'AA' || '#ff149380';
+      ctx.fillRect(
+        hoveredBlock.x * PIXEL_SIZE,
+        hoveredBlock.y * PIXEL_SIZE,
+        hoveredBlock.w * PIXEL_SIZE,
+        hoveredBlock.h * PIXEL_SIZE
+      );
+
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        hoveredBlock.x * PIXEL_SIZE,
+        hoveredBlock.y * PIXEL_SIZE,
+        hoveredBlock.w * PIXEL_SIZE,
+        hoveredBlock.h * PIXEL_SIZE
+      );
+    }
+
+    // Draw selected block
+    if (selectedBlock) {
+      ctx.fillStyle = 'rgba(255, 20, 147, 0.5)';
+      ctx.fillRect(
+        selectedBlock.x * PIXEL_SIZE,
+        selectedBlock.y * PIXEL_SIZE,
+        selectedBlock.w * PIXEL_SIZE,
+        selectedBlock.h * PIXEL_SIZE
+      );
+
+      ctx.strokeStyle = '#ff1493';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(
+        selectedBlock.x * PIXEL_SIZE,
+        selectedBlock.y * PIXEL_SIZE,
+        selectedBlock.w * PIXEL_SIZE,
+        selectedBlock.h * PIXEL_SIZE
+      );
+    }
+  };
 
   useEffect(() => {
-    async function loadPixels() {
-      try {
-        const { data, error } = await supabase
-          .from('pixels')
-          .select('id, status, image_url, website_url, company_name, purchase_id')
-          .in('status', ['sold', 'reserved', 'pending']);
+    drawGrid();
+  }, [hoveredBlock, selectedBlock, soldBlocks, reservedBlocks, loadedImages, allBlocks]);
 
-        if (error) {
-          console.error('Database error:', error);
-          setDbConnected(false);
-          return;
-        }
+  // =============================================================================
+  // EVENT HANDLERS
+  // =============================================================================
 
-        setDbConnected(true);
+  const getBlockAtPosition = (mouseX: number, mouseY: number): Block | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
 
-        const sold = new Map<number, {image_url: string, website_url: string, company_name: string, purchase_id: string}>();
-        const reserved = new Set<number>();
-        const groups = new Map<string, {pixelIds: number[], image_url: string, website_url: string, company_name: string, bounds: {minX: number, minY: number, maxX: number, maxY: number}}>();
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((mouseX - rect.left) / PIXEL_SIZE);
+    const y = Math.floor((mouseY - rect.top) / PIXEL_SIZE);
 
-        data?.forEach(pixel => {
-          if (pixel.status === 'sold') {
-            sold.set(pixel.id, {
-              image_url: pixel.image_url || '',
-              website_url: pixel.website_url || '',
-              company_name: pixel.company_name || '',
-              purchase_id: pixel.purchase_id || ''
-            });
-
-            if (pixel.purchase_id) {
-              const coords = getPixelCoords(pixel.id);
-              if (coords) {
-                if (!groups.has(pixel.purchase_id)) {
-                  groups.set(pixel.purchase_id, {
-                    pixelIds: [pixel.id],
-                    image_url: pixel.image_url || '',
-                    website_url: pixel.website_url || '',
-                    company_name: pixel.company_name || '',
-                    bounds: { minX: coords.x, minY: coords.y, maxX: coords.x, maxY: coords.y }
-                  });
-                } else {
-                  const group = groups.get(pixel.purchase_id)!;
-                  group.pixelIds.push(pixel.id);
-                  group.bounds.minX = Math.min(group.bounds.minX, coords.x);
-                  group.bounds.minY = Math.min(group.bounds.minY, coords.y);
-                  group.bounds.maxX = Math.max(group.bounds.maxX, coords.x);
-                  group.bounds.maxY = Math.max(group.bounds.maxY, coords.y);
-                }
-              }
-            }
-          } else if (pixel.status === 'reserved') {
-            reserved.add(pixel.id);
-          } else if (pixel.status === 'pending') {
-            reserved.add(pixel.id);
-          }
-        });
-
-        setSoldPixels(sold);
-        setReservedPixels(reserved);
-        setPurchaseGroups(groups);
-        setAvailablePixels(TOTAL_PIXELS - sold.size - reserved.size);
-      } catch (err) {
-        console.error('Connection error:', err);
-        setDbConnected(false);
-      }
-    }
-
-    loadPixels();
-  }, []);
-
-  const getPixelId = (x: number, y: number): number | null => {
     if (x < 0 || x >= GRID_WIDTH || y < 0 || y >= GRID_HEIGHT) return null;
-    return (y * GRID_WIDTH) + x + 1;
+
+    return blockIndex.get(`${x},${y}`) || null;
   };
 
-  const getSelectedPixelIds = (): number[] => {
-    if (!selectionStart || !selectionEnd) return [];
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const block = getBlockAtPosition(e.clientX, e.clientY);
+    setHoveredBlock(block);
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredBlock(null);
+  };
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const block = getBlockAtPosition(e.clientX, e.clientY);
     
-    const startX = Math.min(selectionStart.x, selectionEnd.x);
-    const startY = Math.min(selectionStart.y, selectionEnd.y);
-    const endX = Math.max(selectionStart.x, selectionEnd.x);
-    const endY = Math.max(selectionStart.y, selectionEnd.y);
-    
-    const pixelIds: number[] = [];
-    for (let y = startY; y <= endY; y++) {
-      for (let x = startX; x <= endX; x++) {
-        const pixelId = getPixelId(x, y);
-        if (pixelId !== null) {
-          pixelIds.push(pixelId);
+    if (!block) return;
+
+    // If sold, open website
+    if (soldBlocks.has(block.id)) {
+      const soldBlock = soldBlocks.get(block.id);
+      if (soldBlock?.website_url) {
+        let url = soldBlock.website_url;
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          url = 'https://' + url;
         }
+        window.open(url, '_blank');
       }
+      return;
     }
-    return pixelIds;
+
+    // If reserved, do nothing
+    if (reservedBlocks.has(block.id)) {
+      return;
+    }
+
+    // Select the block
+    setSelectedBlock(block);
+    setShowCheckout(false);
+    setCheckoutError('');
   };
 
-  const getUnavailableInSelection = (): { sold: number[], reserved: number[] } => {
-    const selectedIds = getSelectedPixelIds();
-    const sold = selectedIds.filter(id => soldPixels.has(id));
-    const reserved = selectedIds.filter(id => reservedPixels.has(id));
-    return { sold, reserved };
-  };
+  // =============================================================================
+  // CHECKOUT
+  // =============================================================================
 
   const handleBuyClick = () => {
     setShowCheckout(true);
@@ -175,8 +468,7 @@ export default function Home() {
       return;
     }
 
-    const selectionInfo = getSelectionInfo();
-    if (!selectionInfo) return;
+    if (!selectedBlock) return;
 
     setCheckoutLoading(true);
     setCheckoutError('');
@@ -186,8 +478,14 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pixelIds: selectionInfo.selectedIds,
-          price: selectionInfo.price,
+          blockId: selectedBlock.id,
+          zone: selectedBlock.zone,
+          x: selectedBlock.x,
+          y: selectedBlock.y,
+          w: selectedBlock.w,
+          h: selectedBlock.h,
+          pixels: selectedBlock.pixels,
+          price: selectedBlock.price,
           email: email
         })
       });
@@ -209,195 +507,34 @@ export default function Home() {
     }
   };
 
-  const drawGrid = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // =============================================================================
+  // RENDER
+  // =============================================================================
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  const formatPrice = (price: number) => {
+    return price >= 1000 ? `$${(price / 1000).toFixed(0)}K` : `$${price}`;
+  };
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const getZoneStats = () => {
+    const stats: { [key: string]: { total: number; sold: number; available: number } } = {};
+    
+    ZONES.forEach(zone => {
+      stats[zone.name] = { total: 0, sold: 0, available: 0 };
+    });
 
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = '#666';
-    ctx.fillRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
-
-    // Draw grid lines FIRST (before sold pixels)
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= GRID_WIDTH; i++) {
-      ctx.beginPath();
-      ctx.moveTo(i * PIXEL_SIZE, 0);
-      ctx.lineTo(i * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
-      ctx.stroke();
-    }
-    for (let i = 0; i <= GRID_HEIGHT; i++) {
-      ctx.beginPath();
-      ctx.moveTo(0, i * PIXEL_SIZE);
-      ctx.lineTo(GRID_WIDTH * PIXEL_SIZE, i * PIXEL_SIZE);
-      ctx.stroke();
-    }
-
-    // Draw purchase groups AFTER grid lines (covers them up)
-    purchaseGroups.forEach((group) => {
-      const img = loadedImages.get(group.image_url);
-      const { minX, minY, maxX, maxY } = group.bounds;
-      const width = (maxX - minX + 1) * PIXEL_SIZE;
-      const height = (maxY - minY + 1) * PIXEL_SIZE;
-      
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
-      
-      if (img) {
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
-        ctx.drawImage(img, minX * PIXEL_SIZE, minY * PIXEL_SIZE, width, height);
+    allBlocks.forEach(block => {
+      stats[block.zone].total++;
+      if (soldBlocks.has(block.id) || reservedBlocks.has(block.id)) {
+        stats[block.zone].sold++;
+      } else {
+        stats[block.zone].available++;
       }
     });
 
-    // Reserved pixels
-    ctx.fillStyle = '#ffd700';
-    reservedPixels.forEach(pixelId => {
-      const coords = getPixelCoords(pixelId);
-      if (!coords) return;
-      ctx.fillRect(coords.x * PIXEL_SIZE, coords.y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
-    });
-
-    // Selection overlay
-    if (selectionStart && selectionEnd) {
-      const startX = Math.min(selectionStart.x, selectionEnd.x);
-      const startY = Math.min(selectionStart.y, selectionEnd.y);
-      const endX = Math.max(selectionStart.x, selectionEnd.x);
-      const endY = Math.max(selectionStart.y, selectionEnd.y);
-
-      ctx.fillStyle = 'rgba(255, 20, 147, 0.5)';
-      ctx.fillRect(
-        startX * PIXEL_SIZE,
-        startY * PIXEL_SIZE,
-        (endX - startX + 1) * PIXEL_SIZE,
-        (endY - startY + 1) * PIXEL_SIZE
-      );
-
-      ctx.strokeStyle = '#ff1493';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(
-        startX * PIXEL_SIZE,
-        startY * PIXEL_SIZE,
-        (endX - startX + 1) * PIXEL_SIZE,
-        (endY - startY + 1) * PIXEL_SIZE
-      );
-    }
+    return stats;
   };
 
-  useEffect(() => {
-    drawGrid();
-  }, [selectionStart, selectionEnd, soldPixels, reservedPixels, loadedImages, purchaseGroups]);
-
-  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
-    const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
-    const pixelId = getPixelId(x, y);
-
-    if (pixelId && soldPixels.has(pixelId)) {
-      const pixelData = soldPixels.get(pixelId);
-      if (pixelData?.website_url) {
-        let url = pixelData.website_url;
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-          url = 'https://' + url;
-        }
-        window.open(url, '_blank');
-      }
-      return;
-    }
-  };
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
-    const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
-    const pixelId = getPixelId(x, y);
-
-    if (pixelId && soldPixels.has(pixelId)) {
-      return;
-    }
-
-    setIsSelecting(true);
-    setSelectionStart({ x, y });
-    setSelectionEnd({ x, y });
-    setShowCheckout(false);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left) / PIXEL_SIZE);
-    const y = Math.floor((e.clientY - rect.top) / PIXEL_SIZE);
-    const pixelId = getPixelId(x, y);
-
-    if (pixelId && soldPixels.has(pixelId)) {
-      const pixelData = soldPixels.get(pixelId);
-      setHoveredPixel({
-        id: pixelId,
-        company: pixelData?.company_name || 'Unknown',
-        x: e.clientX,
-        y: e.clientY
-      });
-    } else {
-      setHoveredPixel(null);
-    }
-
-    if (!isSelecting) return;
-    setSelectionEnd({ x, y });
-  };
-
-  const handleMouseUp = () => {
-    setIsSelecting(false);
-  };
-
-  const handleMouseLeave = () => {
-    setIsSelecting(false);
-    setHoveredPixel(null);
-  };
-
-  const getSelectionInfo = () => {
-    if (!selectionStart || !selectionEnd) return null;
-
-    const width = Math.abs(selectionEnd.x - selectionStart.x) + 1;
-    const height = Math.abs(selectionEnd.y - selectionStart.y) + 1;
-    const pixelCount = width * height;
-    const price = calculatePrice(pixelCount);
-    const pricePerPixel = getPricePerPixel(pixelCount);
-    const selectedIds = getSelectedPixelIds();
-    const unavailable = getUnavailableInSelection();
-
-    return { width, height, pixelCount, price, pricePerPixel, selectedIds, unavailable };
-  };
-
-  const selectionInfo = getSelectionInfo();
-  const canBuy = selectionInfo && selectionInfo.unavailable.sold.length === 0 && selectionInfo.unavailable.reserved.length === 0;
-
-  const sponsorBlockStyle = {
-    padding: '12px 20px',
-    backgroundColor: '#1a1a1a',
-    color: '#888',
-    border: '2px dashed #555',
-    fontSize: '14px',
-    fontWeight: 'bold' as const,
-    borderRadius: '5px',
-    textAlign: 'center' as const,
-    minWidth: '120px'
-  };
+  const zoneStats = getZoneStats();
 
   return (
     <div style={{ 
@@ -406,6 +543,7 @@ export default function Home() {
       color: '#fff',
       fontFamily: 'Arial, sans-serif'
     }}>
+      {/* Navigation */}
       <nav style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -418,6 +556,7 @@ export default function Home() {
         </a>
         <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
           <span style={{ color: '#0f0' }}>{availablePixels.toLocaleString()} pixels left</span>
+          <span style={{ color: '#888' }}>({availableBlocks.toLocaleString()} blocks)</span>
           {dbConnected === true && <span style={{ color: '#0f0', fontSize: '12px' }}>● DB Connected</span>}
           {dbConnected === false && <span style={{ color: '#f00', fontSize: '12px' }}>● DB Error</span>}
           <a href="/about" style={{ color: '#fff', textDecoration: 'none' }}>About</a>
@@ -427,25 +566,9 @@ export default function Home() {
         </div>
       </nav>
 
-      <div style={{ padding: '20px 50px', maxWidth: '1400px', margin: '0 auto' }}>
+      <div style={{ padding: '20px 30px', maxWidth: '1400px', margin: '0 auto' }}>
         
-        <div style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'stretch',
-          gap: '10px',
-          marginBottom: '20px',
-          flexWrap: 'nowrap',
-          padding: '0 20px'
-        }}>
-          {[1, 2, 3, 4, 5, 6].map(num => (
-            <div key={`sponsor-${num}`} style={sponsorBlockStyle}>
-              <div>Sponsor {num}</div>
-              <div style={{ fontSize: '16px', marginTop: '5px', color: '#fff' }}>$10,000</div>
-            </div>
-          ))}
-        </div>
-
+        {/* Pricing tiers */}
         <h2 style={{ 
           color: '#ff1493', 
           textAlign: 'center', 
@@ -453,209 +576,218 @@ export default function Home() {
           fontSize: '18px', 
           fontWeight: 'normal' 
         }}>
-          Pixel Grid — Click and drag to select pixels, or choose a popular size:
+          Click any block to purchase — Prices based on location
         </h2>
 
         <div style={{
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'stretch',
-          gap: '10px',
+          gap: '8px',
           marginBottom: '20px',
           flexWrap: 'wrap'
         }}>
-          <div style={{
-            padding: '12px 20px',
-            backgroundColor: '#1a1a1a',
-            color: '#fff',
-            border: '2px solid #0f0',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            borderRadius: '5px',
-            textAlign: 'center',
-            minWidth: '120px'
-          }}>
-            <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f0' }}>$30</div>
-            <div style={{ fontSize: '12px', color: '#888', marginTop: '5px' }}>1-9 pixels</div>
-          </div>
-          
-          <div style={{
-            padding: '12px 20px',
-            backgroundColor: '#ff1493',
-            color: '#fff',
-            border: '2px solid #ff1493',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            borderRadius: '5px',
-            textAlign: 'center',
-            minWidth: '120px',
-            position: 'relative'
-          }}>
-            <div style={{
-              position: 'absolute',
-              top: '-10px',
-              right: '-10px',
-              backgroundColor: '#0f0',
-              color: '#000',
-              fontSize: '10px',
-              padding: '3px 8px',
-              borderRadius: '3px',
-              fontWeight: 'bold'
-            }}>
-              POPULAR
+          {ZONES.slice().reverse().map(zone => (
+            <div 
+              key={zone.name}
+              style={{
+                padding: '10px 15px',
+                backgroundColor: zone.color + '30',
+                border: `2px solid ${zone.color}`,
+                borderRadius: '5px',
+                textAlign: 'center',
+                minWidth: '100px'
+              }}
+            >
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: zone.color }}>
+                {formatPrice(zone.price)}
+              </div>
+              <div style={{ fontSize: '11px', color: '#888', marginTop: '3px' }}>
+                {zone.blockW}×{zone.blockH} block
+              </div>
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+                {zoneStats[zone.name]?.available || 0} left
+              </div>
             </div>
-            <div style={{ fontSize: '20px', fontWeight: 'bold' }}>$20</div>
-            <div style={{ fontSize: '12px', color: '#fff', marginTop: '5px' }}>10-99 pixels</div>
-          </div>
-          
-          <div style={{
-            padding: '12px 20px',
-            backgroundColor: '#1a1a1a',
-            color: '#fff',
-            border: '2px solid #0f0',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            borderRadius: '5px',
-            textAlign: 'center',
-            minWidth: '120px'
-          }}>
-            <div style={{ fontSize: '20px', fontWeight: 'bold', color: '#0f0' }}>$10</div>
-            <div style={{ fontSize: '12px', color: '#888', marginTop: '5px' }}>100+ pixels</div>
-          </div>
+          ))}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'center', position: 'relative' }}>
-          <canvas
-            ref={canvasRef}
-            width={GRID_WIDTH * PIXEL_SIZE}
-            height={GRID_HEIGHT * PIXEL_SIZE}
-            onClick={handleCanvasClick}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseLeave}
-            style={{
-              border: '1px solid #555',
-              cursor: 'crosshair'
-            }}
-          />
+        {/* Main grid area */}
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '30px', alignItems: 'flex-start' }}>
           
-          {hoveredPixel && (
+          {/* Canvas */}
+          <div style={{ position: 'relative' }}>
+            <canvas
+              ref={canvasRef}
+              width={GRID_WIDTH * PIXEL_SIZE}
+              height={GRID_HEIGHT * PIXEL_SIZE}
+              onClick={handleClick}
+              onMouseMove={handleMouseMove}
+              onMouseLeave={handleMouseLeave}
+              style={{
+                border: '1px solid #555',
+                cursor: 'pointer'
+              }}
+            />
+
+            {/* Hover tooltip */}
+            {hoveredBlock && (
+              <div style={{
+                position: 'absolute',
+                left: (hoveredBlock.x + hoveredBlock.w / 2) * PIXEL_SIZE,
+                top: hoveredBlock.y * PIXEL_SIZE - 50,
+                transform: 'translateX(-50%)',
+                backgroundColor: '#000',
+                border: `2px solid ${ZONES.find(z => z.name === hoveredBlock.zone)?.color || '#fff'}`,
+                padding: '8px 12px',
+                borderRadius: '5px',
+                fontSize: '12px',
+                pointerEvents: 'none',
+                whiteSpace: 'nowrap',
+                zIndex: 100
+              }}>
+                {soldBlocks.has(hoveredBlock.id) ? (
+                  <>
+                    <div style={{ color: '#ff1493', fontWeight: 'bold' }}>
+                      {soldBlocks.get(hoveredBlock.id)?.company_name || 'Sold'}
+                    </div>
+                    <div style={{ color: '#888' }}>Click to visit</div>
+                  </>
+                ) : reservedBlocks.has(hoveredBlock.id) ? (
+                  <div style={{ color: '#ffd700' }}>Reserved</div>
+                ) : (
+                  <>
+                    <div style={{ color: '#0f0', fontWeight: 'bold' }}>
+                      {formatPrice(hoveredBlock.price)}
+                    </div>
+                    <div style={{ color: '#888' }}>
+                      {hoveredBlock.w}×{hoveredBlock.h} • {hoveredBlock.pixels} pixels
+                    </div>
+                    <div style={{ color: '#666', textTransform: 'capitalize' }}>
+                      {hoveredBlock.zone} zone
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Selection panel */}
+          {selectedBlock && (
             <div style={{
-              position: 'fixed',
-              left: hoveredPixel.x + 10,
-              top: hoveredPixel.y + 10,
-              backgroundColor: '#000',
-              border: '1px solid #ff1493',
-              padding: '8px 12px',
-              borderRadius: '5px',
-              fontSize: '12px',
-              pointerEvents: 'none',
-              zIndex: 1000
+              padding: '20px',
+              backgroundColor: '#1a1a1a',
+              border: '2px solid #ff1493',
+              width: '280px',
+              textAlign: 'center',
+              boxShadow: '0 4px 20px rgba(255, 20, 147, 0.3)',
+              borderRadius: '8px'
             }}>
-              <div style={{ color: '#ff1493', fontWeight: 'bold' }}>{hoveredPixel.company}</div>
-              <div style={{ color: '#888' }}>Click to visit</div>
+              <h3 style={{ color: '#ff1493', margin: '0 0 15px', textTransform: 'capitalize' }}>
+                {selectedBlock.zone} Block
+              </h3>
+              
+              <div style={{ 
+                padding: '15px', 
+                backgroundColor: '#000', 
+                borderRadius: '5px',
+                marginBottom: '15px'
+              }}>
+                <p style={{ margin: '5px 0', color: '#888' }}>
+                  Size: <span style={{ color: '#fff' }}>{selectedBlock.w} × {selectedBlock.h}</span>
+                </p>
+                <p style={{ margin: '5px 0', color: '#888' }}>
+                  Pixels: <span style={{ color: '#fff' }}>{selectedBlock.pixels.toLocaleString()}</span>
+                </p>
+                <p style={{ margin: '5px 0', color: '#888' }}>
+                  Position: <span style={{ color: '#fff' }}>({selectedBlock.x}, {selectedBlock.y})</span>
+                </p>
+              </div>
+
+              <p style={{ margin: '10px 0', fontSize: '32px', fontWeight: 'bold', color: '#0f0' }}>
+                ${selectedBlock.price.toLocaleString()}
+              </p>
+
+              {!showCheckout ? (
+                <button 
+                  onClick={handleBuyClick}
+                  style={{
+                    marginTop: '10px',
+                    padding: '12px 30px',
+                    backgroundColor: '#ff1493',
+                    color: '#fff',
+                    border: 'none',
+                    fontSize: '18px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    borderRadius: '5px',
+                    width: '100%'
+                  }}>
+                  Buy This Block
+                </button>
+              ) : (
+                <div style={{ marginTop: '10px' }}>
+                  <input
+                    type="email"
+                    placeholder="Your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      marginBottom: '10px',
+                      backgroundColor: '#000',
+                      border: '2px solid #333',
+                      color: '#fff',
+                      borderRadius: '5px',
+                      fontSize: '14px',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  {checkoutError && (
+                    <p style={{ color: '#ff0000', fontSize: '12px', marginBottom: '10px' }}>
+                      {checkoutError}
+                    </p>
+                  )}
+                  <button 
+                    onClick={handleCheckout}
+                    disabled={checkoutLoading}
+                    style={{
+                      width: '100%',
+                      padding: '12px',
+                      backgroundColor: checkoutLoading ? '#555' : '#0f0',
+                      color: '#000',
+                      border: 'none',
+                      fontSize: '16px',
+                      fontWeight: 'bold',
+                      cursor: checkoutLoading ? 'not-allowed' : 'pointer',
+                      borderRadius: '5px'
+                    }}>
+                    {checkoutLoading ? 'Processing...' : 'Proceed to Payment'}
+                  </button>
+                </div>
+              )}
+
+              <button 
+                onClick={() => setSelectedBlock(null)}
+                style={{
+                  marginTop: '10px',
+                  padding: '8px',
+                  backgroundColor: 'transparent',
+                  color: '#888',
+                  border: '1px solid #333',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  borderRadius: '5px',
+                  width: '100%'
+                }}>
+                Cancel
+              </button>
             </div>
           )}
         </div>
 
-        {selectionInfo && selectionEnd && (
-          <div style={{
-            position: 'fixed',
-            top: '50%',
-            right: '20px',
-            transform: 'translateY(-50%)',
-            padding: '20px',
-            backgroundColor: '#1a1a1a',
-            border: '2px solid #ff1493',
-            maxWidth: '300px',
-            textAlign: 'center',
-            boxShadow: '0 4px 20px rgba(255, 20, 147, 0.5)',
-            zIndex: 1000,
-            borderRadius: '8px'
-          }}>
-            <h3 style={{ color: '#ff1493', margin: '0 0 15px' }}>Your Selection</h3>
-            <p style={{ margin: '5px 0' }}>Size: {selectionInfo.width} × {selectionInfo.height}</p>
-            <p style={{ margin: '5px 0' }}>Pixels: {selectionInfo.pixelCount.toLocaleString()}</p>
-            <p style={{ margin: '5px 0', fontSize: '12px', color: '#888' }}>
-              @ ${selectionInfo.pricePerPixel}/pixel
-            </p>
-            
-            {selectionInfo.unavailable.sold.length > 0 && (
-              <p style={{ margin: '5px 0', color: '#ff0000', fontSize: '12px' }}>
-                ⚠️ {selectionInfo.unavailable.sold.length} pixel(s) already sold
-              </p>
-            )}
-            {selectionInfo.unavailable.reserved.length > 0 && (
-              <p style={{ margin: '5px 0', color: '#ffd700', fontSize: '12px' }}>
-                ⚠️ {selectionInfo.unavailable.reserved.length} pixel(s) reserved
-              </p>
-            )}
-            
-            <p style={{ margin: '10px 0', fontSize: '28px', fontWeight: 'bold', color: '#0f0' }}>
-              ${selectionInfo.price.toLocaleString()}
-            </p>
-
-            {!showCheckout ? (
-              <button 
-                onClick={handleBuyClick}
-                disabled={!canBuy}
-                style={{
-                  marginTop: '10px',
-                  padding: '12px 30px',
-                  backgroundColor: canBuy ? '#ff1493' : '#555',
-                  color: '#fff',
-                  border: 'none',
-                  fontSize: '18px',
-                  fontWeight: 'bold',
-                  cursor: canBuy ? 'pointer' : 'not-allowed',
-                  borderRadius: '5px'
-                }}>
-                Buy Now
-              </button>
-            ) : (
-              <div style={{ marginTop: '10px' }}>
-                <input
-                  type="email"
-                  placeholder="Your email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    marginBottom: '10px',
-                    backgroundColor: '#000',
-                    border: '2px solid #333',
-                    color: '#fff',
-                    borderRadius: '5px',
-                    fontSize: '14px',
-                    boxSizing: 'border-box'
-                  }}
-                />
-                {checkoutError && (
-                  <p style={{ color: '#ff0000', fontSize: '12px', marginBottom: '10px' }}>{checkoutError}</p>
-                )}
-                <button 
-                  onClick={handleCheckout}
-                  disabled={checkoutLoading}
-                  style={{
-                    width: '100%',
-                    padding: '12px',
-                    backgroundColor: checkoutLoading ? '#555' : '#0f0',
-                    color: '#000',
-                    border: 'none',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
-                    cursor: checkoutLoading ? 'not-allowed' : 'pointer',
-                    borderRadius: '5px'
-                  }}>
-                  {checkoutLoading ? 'Processing...' : 'Proceed to Payment'}
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
+        {/* Footer info */}
         <div style={{ 
           textAlign: 'center', 
           marginTop: '20px', 
@@ -664,7 +796,7 @@ export default function Home() {
           fontSize: '12px'
         }}>
           <p style={{ margin: '0 0 10px' }}>
-            100,000 pixels • Each pixel becomes an NFT when the grid sells out
+            {allBlocks.length.toLocaleString()} blocks • {TOTAL_PIXELS.toLocaleString()} pixels • Max revenue: $2,342,120
           </p>
           <p style={{ margin: '0', color: '#ff1493', fontSize: '24px', fontWeight: 'bold' }}>
             Stitch go boom what's up, Hello Micah
