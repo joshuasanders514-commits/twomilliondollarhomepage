@@ -12,12 +12,10 @@ function SuccessContent() {
   
   const [loading, setLoading] = useState(true);
   const [purchase, setPurchase] = useState<any>(null);
-  const [pixelIds, setPixelIds] = useState<number[]>([]);
+  const [block, setBlock] = useState<any>(null);
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [urlMode, setUrlMode] = useState<'single' | 'multiple'>('single');
-  const [singleUrl, setSingleUrl] = useState('');
-  const [multipleUrls, setMultipleUrls] = useState('');
+  const [websiteUrl, setWebsiteUrl] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -45,13 +43,17 @@ function SuccessContent() {
 
       setPurchase(purchaseData);
 
-      const { data: pixels, error: pixelsError } = await supabase
-        .from('pixels')
-        .select('id')
-        .eq('purchase_id', purchaseId);
+      // Load block data
+      if (purchaseData.block_id) {
+        const { data: blockData, error: blockError } = await supabase
+          .from('blocks')
+          .select('*')
+          .eq('block_id', purchaseData.block_id)
+          .single();
 
-      if (!pixelsError && pixels) {
-        setPixelIds(pixels.map(p => p.id).sort((a, b) => a - b));
+        if (!blockError && blockData) {
+          setBlock(blockData);
+        }
       }
 
       if (purchaseData.image_url) {
@@ -82,13 +84,13 @@ function SuccessContent() {
       return;
     }
 
-    if (urlMode === 'single' && !singleUrl) {
+    if (!websiteUrl) {
       setError('Please enter a URL');
       return;
     }
 
-    if (urlMode === 'multiple' && !multipleUrls.trim()) {
-      setError('Please enter at least one URL');
+    if (!purchase?.block_id) {
+      setError('Block ID not found');
       return;
     }
 
@@ -97,7 +99,7 @@ function SuccessContent() {
 
     try {
       const fileExt = image.name.split('.').pop();
-      const fileName = `${purchaseId}.${fileExt}`;
+      const fileName = `${purchase.block_id}.${fileExt}`;
       
       const { error: uploadError } = await supabase.storage
         .from('pixel-images')
@@ -115,22 +117,12 @@ function SuccessContent() {
 
       const imageUrl = urlData.publicUrl;
 
-      let urls: string[] = [];
-      if (urlMode === 'single') {
-        urls = pixelIds.map(() => singleUrl);
-      } else {
-        const urlList = multipleUrls.split('\n').map(u => u.trim()).filter(u => u);
-        while (urlList.length < pixelIds.length) {
-          urlList.push(urlList[urlList.length - 1] || '');
-        }
-        urls = urlList.slice(0, pixelIds.length);
-      }
-
+      // Update purchase
       const { error: purchaseUpdateError } = await supabase
         .from('purchases')
         .update({
           image_url: imageUrl,
-          website_url: urls[0],
+          website_url: websiteUrl,
           company_name: companyName,
           status: 'completed'
         })
@@ -142,20 +134,23 @@ function SuccessContent() {
         return;
       }
 
-      for (let i = 0; i < pixelIds.length; i++) {
-        const { error: pixelError } = await supabase
-          .from('pixels')
-          .update({
-            status: 'sold',
-            image_url: imageUrl,
-            website_url: urls[i],
-            company_name: companyName
-          })
-          .eq('id', pixelIds[i]);
-        
-        if (pixelError) {
-          console.error('Error updating pixel:', pixelIds[i], pixelError);
-        }
+      // Update block to sold
+      const { error: blockError } = await supabase
+        .from('blocks')
+        .update({
+          status: 'sold',
+          image_url: imageUrl,
+          website_url: websiteUrl,
+          company_name: companyName,
+          sold_at: new Date().toISOString()
+        })
+        .eq('block_id', purchase.block_id);
+
+      if (blockError) {
+        console.error('Error updating block:', blockError);
+        setError('Failed to update block: ' + blockError.message);
+        setSubmitting(false);
+        return;
       }
 
       setSubmitted(true);
@@ -197,7 +192,7 @@ function SuccessContent() {
         padding: '20px'
       }}>
         <h1 style={{ color: '#0f0', marginBottom: '20px' }}>🎉 You're Live!</h1>
-        <p style={{ marginBottom: '20px' }}>Your pixels are now displayed on the grid.</p>
+        <p style={{ marginBottom: '20px' }}>Your block is now displayed on the grid.</p>
         <a href="/" style={{
           padding: '15px 30px',
           backgroundColor: '#ff1493',
@@ -223,8 +218,8 @@ function SuccessContent() {
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
         <h1 style={{ color: '#0f0', marginBottom: '10px' }}>✓ Payment Successful!</h1>
         <p style={{ color: '#888', marginBottom: '30px' }}>
-          You purchased {pixelIds.length} pixel{pixelIds.length > 1 ? 's' : ''}. 
-          Now upload your image and enter your URL{pixelIds.length > 1 ? 's' : ''}.
+          You purchased a {block?.w}×{block?.h} {block?.zone} block ({block?.pixels || purchase?.pixel_count} pixels). 
+          Now upload your image and enter your URL.
         </p>
 
         {error && (
@@ -285,94 +280,34 @@ function SuccessContent() {
           </p>
         </div>
 
-        {pixelIds.length > 1 && (
-          <div style={{ marginBottom: '25px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
-              URL Options
-            </label>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                onClick={() => setUrlMode('single')}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: urlMode === 'single' ? '#ff1493' : '#1a1a1a',
-                  color: '#fff',
-                  border: '2px solid #ff1493',
-                  borderRadius: '5px',
-                  cursor: 'pointer'
-                }}
-              >
-                Same URL for all
-              </button>
-              <button
-                onClick={() => setUrlMode('multiple')}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: urlMode === 'multiple' ? '#ff1493' : '#1a1a1a',
-                  color: '#fff',
-                  border: '2px solid #ff1493',
-                  borderRadius: '5px',
-                  cursor: 'pointer'
-                }}
-              >
-                Different URLs ({pixelIds.length} backlinks)
-              </button>
-            </div>
-          </div>
-        )}
-
         <div style={{ marginBottom: '25px' }}>
           <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold' }}>
-            {urlMode === 'single' || pixelIds.length === 1 
-              ? 'Website URL' 
-              : `Enter ${pixelIds.length} URLs (one per line)`}
+            Website URL
           </label>
-          
-          {(urlMode === 'single' || pixelIds.length === 1) ? (
-            <input
-              type="url"
-              value={singleUrl}
-              onChange={(e) => setSingleUrl(e.target.value)}
-              placeholder="https://yourwebsite.com"
-              style={{
-                width: '100%',
-                padding: '12px',
-                backgroundColor: '#1a1a1a',
-                border: '2px solid #333',
-                color: '#fff',
-                borderRadius: '5px',
-                fontSize: '16px'
-              }}
-            />
-          ) : (
-            <textarea
-              value={multipleUrls}
-              onChange={(e) => setMultipleUrls(e.target.value)}
-              placeholder={`https://yoursite.com/page1\nhttps://yoursite.com/page2\nhttps://yoursite.com/page3`}
-              rows={Math.min(pixelIds.length, 10)}
-              style={{
-                width: '100%',
-                padding: '12px',
-                backgroundColor: '#1a1a1a',
-                border: '2px solid #333',
-                color: '#fff',
-                borderRadius: '5px',
-                fontSize: '14px',
-                fontFamily: 'monospace'
-              }}
-            />
-          )}
-          {urlMode === 'multiple' && pixelIds.length > 1 && (
-            <p style={{ color: '#888', fontSize: '12px', marginTop: '5px' }}>
-              Enter up to {pixelIds.length} URLs. If you enter fewer, the last URL will be repeated.
-            </p>
-          )}
+          <input
+            type="url"
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
+            placeholder="https://yourwebsite.com"
+            style={{
+              width: '100%',
+              padding: '12px',
+              backgroundColor: '#1a1a1a',
+              border: '2px solid #333',
+              color: '#fff',
+              borderRadius: '5px',
+              fontSize: '16px'
+            }}
+          />
         </div>
 
         <div style={{ marginBottom: '25px', padding: '15px', backgroundColor: '#1a1a1a', borderRadius: '5px' }}>
-          <p style={{ fontWeight: 'bold', marginBottom: '5px' }}>Your Pixel IDs:</p>
-          <p style={{ color: '#888', fontSize: '12px', wordBreak: 'break-all' }}>
-            {pixelIds.join(', ')}
+          <p style={{ fontWeight: 'bold', marginBottom: '5px' }}>Your Block:</p>
+          <p style={{ color: '#888', fontSize: '14px' }}>
+            {block?.zone ? `${block.zone.charAt(0).toUpperCase() + block.zone.slice(1)} Zone` : 'Loading...'} • {block?.w}×{block?.h} • {block?.pixels || purchase?.pixel_count} pixels
+          </p>
+          <p style={{ color: '#666', fontSize: '12px', marginTop: '5px' }}>
+            Position: ({block?.x}, {block?.y})
           </p>
         </div>
 
