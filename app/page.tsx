@@ -796,9 +796,13 @@ export default function Home() {
           <p style={{ margin: '0 0 10px' }}>
             {allBlocks.length.toLocaleString()} blocks • {TOTAL_PIXELS.toLocaleString()} pixels • Max revenue: $2,342,120
           </p>
-          <p style={{ margin: '0', color: '#ff1493', fontSize: '24px', fontWeight: 'bold' }}>
+          <p style={{ margin: '0 0 15px', color: '#ff1493', fontSize: '24px', fontWeight: 'bold' }}>
             Stitch go boom what's up, Hello Micah
           </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '20px' }}>
+            <a href="/privacy" style={{ color: '#888', textDecoration: 'none' }}>Privacy Policy</a>
+            <a href="/terms" style={{ color: '#888', textDecoration: 'none' }}>Terms of Service</a>
+          </div>
         </div>
 
       </div>
