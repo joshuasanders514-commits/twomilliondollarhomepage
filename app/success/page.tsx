@@ -20,6 +20,7 @@ function SuccessContent() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState('');
+  const [emailSent, setEmailSent] = useState(false);
 
   useEffect(() => {
     async function loadPurchase() {
@@ -53,6 +54,23 @@ function SuccessContent() {
 
         if (!blockError && blockData) {
           setBlock(blockData);
+          
+          // Send receipt email (only once)
+          if (!emailSent && purchaseData.email) {
+            setEmailSent(true);
+            fetch('/api/send-receipt', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: purchaseData.email,
+                blockId: blockData.block_id,
+                zone: blockData.zone,
+                pixels: blockData.pixels,
+                price: blockData.price / 100,
+                purchaseId: purchaseId
+              })
+            }).catch(err => console.error('Email error:', err));
+          }
         }
       }
 
@@ -64,7 +82,7 @@ function SuccessContent() {
     }
 
     loadPurchase();
-  }, [purchaseId]);
+  }, [purchaseId, emailSent]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
