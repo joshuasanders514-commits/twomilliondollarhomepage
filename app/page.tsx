@@ -203,13 +203,24 @@ export default function Home() {
   useEffect(() => {
     async function loadBlocks() {
       try {
-        const { data, error } = await supabase
+        // Calculate expiration cutoff (30 minutes ago)
+        const expiryCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+        // Get sold blocks (always show)
+        const { data: soldData, error: soldError } = await supabase
           .from('blocks')
           .select('block_id, status, image_url, website_url, company_name')
-          .in('status', ['sold', 'reserved', 'pending']);
+          .eq('status', 'sold');
 
-        if (error) {
-          console.error('Database error:', error);
+        // Get pending/reserved blocks that are NOT expired
+        const { data: reservedData, error: reservedError } = await supabase
+          .from('blocks')
+          .select('block_id, status, image_url, website_url, company_name, reserved_at')
+          .in('status', ['reserved', 'pending'])
+          .gte('reserved_at', expiryCutoff);
+
+        if (soldError || reservedError) {
+          console.error('Database error:', soldError || reservedError);
           setDbConnected(false);
           return;
         }
@@ -219,17 +230,17 @@ export default function Home() {
         const sold = new Map<string, SoldBlock>();
         const reserved = new Set<string>();
 
-        data?.forEach(row => {
-          if (row.status === 'sold') {
-            sold.set(row.block_id, {
-              block_id: row.block_id,
-              image_url: row.image_url || '',
-              website_url: row.website_url || '',
-              company_name: row.company_name || ''
-            });
-          } else {
-            reserved.add(row.block_id);
-          }
+        soldData?.forEach(row => {
+          sold.set(row.block_id, {
+            block_id: row.block_id,
+            image_url: row.image_url || '',
+            website_url: row.website_url || '',
+            company_name: row.company_name || ''
+          });
+        });
+
+        reservedData?.forEach(row => {
+          reserved.add(row.block_id);
         });
 
         setSoldBlocks(sold);
@@ -793,9 +804,6 @@ export default function Home() {
           color: '#666',
           fontSize: '12px'
         }}>
-          <p style={{ margin: '0 0 10px' }}>
-            {allBlocks.length.toLocaleString()} blocks • {TOTAL_PIXELS.toLocaleString()} pixels • Max revenue: $2,342,120
-          </p>
           <p style={{ margin: '0 0 15px', color: '#ff1493', fontSize: '24px', fontWeight: 'bold' }}>
             Stitch go boom what's up, Hello Micah
           </p>

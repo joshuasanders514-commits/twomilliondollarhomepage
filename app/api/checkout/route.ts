@@ -11,27 +11,38 @@ const supabase = createClient(
 
 export const dynamic = 'force-dynamic';
 
+const RESERVATION_MINUTES = 30;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { blockId, zone, x, y, w, h, pixels, price, email } = body;
 
+    // Calculate expiration cutoff (30 minutes ago)
+    const expiryCutoff = new Date(Date.now() - RESERVATION_MINUTES * 60 * 1000).toISOString();
+
     // Check if block exists and its status
     const { data: existingBlock, error: checkError } = await supabase
       .from('blocks')
-      .select('block_id, status')
+      .select('block_id, status, reserved_at')
       .eq('block_id', blockId)
       .single();
 
     if (checkError && checkError.code !== 'PGRST116') {
-      // PGRST116 = not found, which is okay
       return Response.json({ error: 'Database error' }, { status: 500 });
     }
 
-    if (existingBlock && existingBlock.status !== 'available') {
-      return Response.json({ 
-        error: 'This block is no longer available'
-      }, { status: 400 });
+    // Block is unavailable if: it's sold, OR it's pending/reserved AND not expired
+    if (existingBlock) {
+      const isExpired = existingBlock.reserved_at && existingBlock.reserved_at < expiryCutoff;
+      
+      if (existingBlock.status === 'sold') {
+        return Response.json({ error: 'This block is no longer available' }, { status: 400 });
+      }
+      
+      if ((existingBlock.status === 'pending' || existingBlock.status === 'reserved') && !isExpired) {
+        return Response.json({ error: 'This block is no longer available' }, { status: 400 });
+      }
     }
 
     // Create purchase record
