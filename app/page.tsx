@@ -71,7 +71,7 @@ const ZONES: ZoneConfig[] = [
     name: 'tiny',
     zoneX: 0, zoneY: 0, zoneW: 250, zoneH: 400,
     blockW: 1, blockH: 1,
-    price: 1,
+    price: 30,
     color: '#F09595',
     hoverColor: '#FFAAAA'
   }
